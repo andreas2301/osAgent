@@ -30,6 +30,21 @@ unmaintained = "all"
 yanked = "deny"
 # Ignore known unmaintained transitive deps we cannot easily replace
 ignore = [
+    # ── Post-fork-point advisories (added 2026-06-13) ──
+    # These five RUSTSEC entries surfaced after upstream zeroclaw v0.7.5 was tagged
+    # (our fork point). Quarterly upstream-sync per UPSTREAM_SYNC.md will absorb the
+    # upstream fixes; for M1's CI greenery we ignore-with-reason. Each entry MUST be
+    # re-evaluated at the next quarterly sync.
+    { id = "RUSTSEC-2026-0159", reason = "matrix-sdk sender-binding gaps in to-device messages; transitive via matrix-sdk; fix awaits upstream matrix-sdk upgrade; affected attack vector requires compromised homeserver" },
+    { id = "RUSTSEC-2026-0173", reason = "post-fork-point advisory (see UPSTREAM_SYNC.md); revisit at next quarterly sync" },
+    { id = "RUSTSEC-2026-0178", reason = "post-fork-point advisory (see UPSTREAM_SYNC.md); revisit at next quarterly sync" },
+    { id = "RUSTSEC-2026-0179", reason = "tokio-postgres SCRAM iteration count unbounded; only triggerable by malicious server; we don't ship postgres-memory in the engineer/wizard runtime — postgres-memory feature is off in default features per Phase 1.5 strip" },
+    { id = "RUSTSEC-2026-0180", reason = "tokio-postgres hstore decoding panic; same justification as RUSTSEC-2026-0179" },
+    # ── Unmaintained-crate advisory (separate class from vulnerability) ──
+    { id = "RUSTSEC-2024-0436", reason = "proc-macro-error2 unmaintained; transitive proc-macro dep; build-time only, no runtime exposure" },
+
+    # ── Pre-existing upstream ignores (preserved from zeroclaw v0.7.5) ──
+
     # rand -- re-entrancy unsoundness via custom global logger; fixed in rand 0.8.6
     # for the 0.8.x copy in our tree; the 0.7.x copy predates rand::rng() entirely
     # and is not affected; the 0.9.x copy is outside the advisory's affected range
