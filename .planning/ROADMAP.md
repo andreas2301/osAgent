@@ -6,7 +6,7 @@ osAgent is a tailored fork of zeroclaw v0.7.5 producing two compile-time-separat
 
 ## Milestones
 
-- 🚧 **M1 — Foundation** — Phases 1.1–1.6 (in progress)
+- 🚧 **M1 — Foundation** — Phases 1.1–1.6 (5 structural ✅; 1 partial — cargo cleanup in PR)
 - 📋 **M2 — Engineer binary production-ready** — planned, not yet roadmapped
 - 📋 **M3 — Wizard binary + subagent system** — planned, not yet roadmapped
 - 📋 **M4 — Channels + Ops + Provider routing + Production rollout** — planned, not yet roadmapped
@@ -17,12 +17,20 @@ osAgent is a tailored fork of zeroclaw v0.7.5 producing two compile-time-separat
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (1.1, 1.2, ...): M1's six foundation sub-phases (executed in numeric order)
 
-- [ ] **Phase 1.1: Fork & Attribution & Sync Runbook** — Public andreas2301/osAgent fork with preserved attribution, quarterly upstream-sync runbook, cargo-deny license + AGPL/WTFPL bans
-- [ ] **Phase 1.2: Workspace Skeleton & Binary Split** — Two top-level binary crates, explicit-registration trait registries, read-only inventory of upstream module names, resolver=2 pin, default-features=false hygiene
-- [ ] **Phase 1.3: MCP Boundary & 4-Layer CI Gate** — Structural `osagent-tools-mcp` crate exclusion, 4-layer CI gate (source-grep + nm + cargo-bloat + strings), reproducibility lane — MILESTONE-DEFINING GREEN CHECK
-- [ ] **Phase 1.4: Whole-Crate Drops & Telemetry Audit** — Drop 5 dead crates, delete webhook channel source, audit + strip all phone-home, cargo-deny ban entries for AGPL Signal SDKs
-- [ ] **Phase 1.5: Source Strips & MANIFEST Emission** — Strip 24 channels / ~55 providers / ~35 tools / non-en locales, build-time `MANIFEST.toml` with `[declared]+[detected]` sections, `osagent manifest --diff` CLI, reproducibility profile
-- [ ] **Phase 1.6: Gateway Fork & Install Drop-In** — Forked `osagent-gateway-ws-only` (kept `/ws/chat` + paired_tokens), engineer-only `install_osagent.yml` ansible PR opened against sovereign-shield-install-guide
+**Bookkeeping note**: phases were executed inline (CONTEXT → execute → SUMMARY/VERIFICATION) without per-phase `/gsd:transition` calls, which is why all artifacts ship on disk but this checkbox list lagged. Synced 2026-06-13.
+
+- [x] **Phase 1.1: Fork & Attribution & Sync Runbook** ✅ (commit fc3139a, 8165015) — Public `andreas2301/osAgent` fork live, working branch `osagent-main`, NOTICE preserved + osAgent attribution + Apache-2.0 §4(d) verbatim block, `deny.toml` with AGPL/WTFPL/phone-home bans, SHA-pinned cargo-deny-action CI, UPSTREAM_SYNC.md runbook on `feat/osagent-upstream-sync-runbook` (sovereign-shield-backup PR pending merge). **46/46 tests green.**
+- [x] **Phase 1.2: Workspace Skeleton & Binary Split** ✅ (commit e614cee) — `bins/engineer` + `bins/wizard` workspace members; resolver=2 already pinned by upstream; WS-04 ratified (no `inventory!`/`linkme!`/`ctor!` in source; `deny.toml` bans the crates; CI `no-distributed-slice-registration` job); workspace-build CI job. **30/30 tests green.**
+- [x] **Phase 1.3: MCP Boundary & 4-Layer CI Gate** ✅ MILESTONE-DEFINING (commit e332aa1) — `crates/osagent-tools-mcp/` workspace member; `bins/wizard/Cargo.toml` has zero MCP dep declaration; 4-layer gate script (`scripts/wizard-no-mcp-gate.sh`); CI job `wizard-no-mcp-gate` needs:[workspace-build], installs `cargo-bloat`, runs all 4 layers. **18/18 tests green; layer 1 verified locally; layers 2-4 fire on CI Linux.**
+- [x] **Phase 1.4: Whole-Crate Drops & Telemetry Audit** ✅ (commit 07dde29) — ~16.2K LOC deleted: `zeroclaw-hardware` (9.5K), `robot-kit` (3.5K), `aardvark-sys` (0.5K), `apps/tauri` (0.8K), `zeroclaw-plugins` (1.9K). Webhook channel triple-removed. `opentelemetry-otlp` + `observability-otel` removed. MCP files physically migrated to `osagent-tools-mcp/src/`. **48/48 tests green.**
+- [~] **Phase 1.5: Source Strips & MANIFEST Emission** 🟡 PARTIAL (commits 0a9da02, beec3af, 9d3e2fd) — **Structural strips ✅**: 28 channel sources removed (v1 kept: telegram, slack, matrix, mattermost, whatsapp-cloud, signal); 9 provider sources removed (v1 kept: anthropic, gemini, openai-compatible base, ollama, openrouter); 36 tool sources removed; non-en locales removed (Fluent pipeline kept); `osagent-manifest` crate ships with 8 TDD tests (RED → GREEN); MANIFEST.toml.template scaffold; reproducibility profile verified. **156/156 bash tests green.** **PARTIAL** = cascading `use`-statement cleanup in `crates/zeroclaw-runtime/src/tools/mod.rs` registration functions is in PR `chore/01.5-cargo-cleanup` (first pass committed; ~17 more `Arc::new(<DroppedTool>::new(...))` blocks pending; best resolved with cargo locally). `build.rs` MANIFEST emission + binary `--manifest-diff` wiring also pending.
+- [x] **Phase 1.6: Gateway Fork & Install Drop-In** ✅ (commit 269b050) — Gateway sub-surface stripped (ACP/REST endpoints/SSE/static-files/openapi/tls/voice/ws_approval); `/ws/chat` + `paired_tokens` kept (OS-MDashboard chat-relay dependency); install-guide PR `feat/osagent-install-task` on sovereign-shield-install-guide with structural `install_osagent.yml` template (`meta:end_play` guard prevents accidental production deploy until M2 fills binary URL + SHA256). **34/34 tests green.**
+
+**Milestone-level extras shipped during M1**:
+- TDD discipline framework (`tests/lib.sh`, `tests/run-all.sh`, per-phase test files) — **332 bash assertions / 6 suites / 0 failures locally**
+- Rust integration tests in `bins/{engineer,wizard}/tests/binary_smoke.rs` + `crates/osagent-manifest/tests/manifest_diff.rs` (16 Rust tests; CI runs them)
+- 7-job CI workflow at `.github/workflows/osagent-policy.yml` with branch protection on `osagent-main` (all 7 required for merge; verified by rejected direct push 2026-06-13)
+- Full milestone audit at [`.planning/v1-M1-MILESTONE-AUDIT.md`](v1-M1-MILESTONE-AUDIT.md)
 
 ## Phase Details
 
