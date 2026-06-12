@@ -16,9 +16,17 @@
 start_suite "01.1 — Fork & Attribution & Sync Runbook"
 
 # Git fork wiring
-assert_cmd_ok "git remote -v | grep -qE '^upstream\s+https://github\.com/zeroclaw-labs/zeroclaw'" "upstream remote points at zeroclaw-labs/zeroclaw"
-assert_cmd_ok "git remote -v | grep -qE '^origin\s+https://github\.com/andreas2301/osAgent'"  "origin remote points at andreas2301/osAgent"
-assert_cmd_ok "git branch --list osagent-main | grep -q osagent-main"                          "osagent-main branch exists"
+# Git-remote assertions only apply on developer hosts. CI runners get a
+# fresh `git clone` from GitHub Actions checkout, which configures only
+# `origin` and lands in a detached-HEAD or PR-branch state. Skip the
+# remote/branch checks under CI.
+if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI:-}" = "true" ]; then
+  echo "  ⊘ skipping local-git-state checks (CI environment)"
+else
+  assert_cmd_ok "git remote -v | grep -qE '^upstream\s+https://github\.com/zeroclaw-labs/zeroclaw'" "upstream remote points at zeroclaw-labs/zeroclaw"
+  assert_cmd_ok "git remote -v | grep -qE '^origin\s+https://github\.com/andreas2301/osAgent'"      "origin remote points at andreas2301/osAgent"
+  assert_cmd_ok "git branch --list osagent-main | grep -q osagent-main"                            "osagent-main branch exists"
+fi
 
 # NOTICE structure
 assert_file_exists "NOTICE"
