@@ -157,7 +157,8 @@ jobs:
       - name: Build osagent-wizard --release
         run: cargo build -p osagent-wizard --release
       - name: Install cargo-bloat (Layer 3)
-        run: cargo install cargo-bloat --locked --version ^0.13
+        # latest as of 2026-06: 0.12.1; pin major to allow patches but not 1.x breaking changes
+        run: cargo install cargo-bloat --locked --version ^0.12
       - name: Run 4-layer wizard-no-mcp-gate
         run: |
           chmod +x scripts/wizard-no-mcp-gate.sh

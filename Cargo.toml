@@ -234,7 +234,6 @@ crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 glob = { version = "0.3", optional = true }
 
 # Nostr key validation for wizard (behind channel-nostr feature)
-nostr-sdk = { version = "0.44", default-features = false, optional = true }
 
 # Binary discovery (init system detection)
 which = { version = "8.0", optional = true }
@@ -252,9 +251,6 @@ tokio-rustls = { version = "0.26.4", optional = true }
 webpki-roots = { version = "1.0.6", optional = true }
 
 # email
-lettre = { version = "0.11.19", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"], optional = true }
-mail-parser = { version = "0.11.2", optional = true }
-async-imap = { version = "0.11", features = ["runtime-tokio"], default-features = false, optional = true }
 
 # HTTP server (gateway) — replaces raw TCP for proper HTTP/1.1 compliance
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws", "macros"], optional = true }
@@ -298,16 +294,9 @@ agent-runtime = [
     "dep:ratatui", "dep:crossterm",
     "dep:tokio-tungstenite", "dep:tokio-socks", "dep:hostname",
     "dep:rustls", "dep:rustls-pemfile", "dep:rustls-pki-types", "dep:tokio-rustls", "dep:webpki-roots",
-    "dep:lettre", "dep:mail-parser", "dep:async-imap",
-    "channel-email", "channel-telegram", "channel-lark",
-    "channel-discord", "channel-slack", "channel-signal",
-    "channel-mattermost", "channel-irc", "channel-imessage",
-    "channel-dingtalk", "channel-qq", "channel-bluesky",
-    "channel-twitter", "channel-reddit", "channel-notion",
-    "channel-linq", "channel-wati", "channel-nextcloud",
-    "channel-mochat", "channel-wecom", "channel-clawdtalk",
-    "channel-acp-server", "channel-whatsapp-cloud",
-    "channel-voice-call",
+    # Phase 1.5 strip: removed dep:lettre/mail-parser/async-imap (email channel dropped)
+    "channel-telegram", "channel-slack", "channel-signal",
+    "channel-mattermost", "channel-whatsapp-cloud", "channel-matrix",
 ]
 
 # Major subsystems — each forwards to exactly ONE crate
@@ -321,36 +310,36 @@ schema-export = ["zeroclaw-config/schema-export"]
 acp-bridge = ["dep:tokio-tungstenite"]
 
 # Channels — each forwards directly to zeroclaw-channels (1 hop)
-channel-email = ["zeroclaw-channels/channel-email"]
+# Phase 1.5 strip: channel-email feature removed
 channel-telegram = ["zeroclaw-channels/channel-telegram"]
-channel-lark = ["zeroclaw-channels/channel-lark"]
-channel-nostr = ["zeroclaw-channels/channel-nostr", "zeroclaw-runtime/channel-nostr", "dep:nostr-sdk"]
+# Phase 1.5 strip: channel-lark feature removed
+# Phase 1.5 strip: channel-nostr feature removed
 channel-matrix = ["zeroclaw-channels/channel-matrix"]
-channel-discord = ["zeroclaw-channels/channel-discord"]
+# Phase 1.5 strip: channel-discord feature removed
 channel-slack = ["zeroclaw-channels/channel-slack"]
 channel-signal = ["zeroclaw-channels/channel-signal"]
 channel-mattermost = ["zeroclaw-channels/channel-mattermost"]
-channel-irc = ["zeroclaw-channels/channel-irc"]
-channel-imessage = ["zeroclaw-channels/channel-imessage"]
-channel-dingtalk = ["zeroclaw-channels/channel-dingtalk"]
-channel-qq = ["zeroclaw-channels/channel-qq"]
-channel-bluesky = ["zeroclaw-channels/channel-bluesky"]
-channel-twitter = ["zeroclaw-channels/channel-twitter"]
-channel-reddit = ["zeroclaw-channels/channel-reddit"]
-channel-notion = ["zeroclaw-channels/channel-notion"]
-channel-linq = ["zeroclaw-channels/channel-linq"]
-channel-wati = ["zeroclaw-channels/channel-wati"]
-channel-nextcloud = ["zeroclaw-channels/channel-nextcloud"]
-channel-mochat = ["zeroclaw-channels/channel-mochat"]
-channel-wechat = ["zeroclaw-channels/channel-wechat"]
-channel-wecom = ["zeroclaw-channels/channel-wecom"]
-channel-clawdtalk = ["zeroclaw-channels/channel-clawdtalk"]
-channel-acp-server = ["zeroclaw-channels/channel-acp-server"]
+# Phase 1.5 strip: channel-irc feature removed
+# Phase 1.5 strip: channel-imessage feature removed
+# Phase 1.5 strip: channel-dingtalk feature removed
+# Phase 1.5 strip: channel-qq feature removed
+# Phase 1.5 strip: channel-bluesky feature removed
+# Phase 1.5 strip: channel-twitter feature removed
+# Phase 1.5 strip: channel-reddit feature removed
+# Phase 1.5 strip: channel-notion feature removed
+# Phase 1.5 strip: channel-linq feature removed
+# Phase 1.5 strip: channel-wati feature removed
+# Phase 1.5 strip: channel-nextcloud feature removed
+# Phase 1.5 strip: channel-mochat feature removed
+# Phase 1.5 strip: channel-wechat feature removed
+# Phase 1.5 strip: channel-wecom feature removed
+# Phase 1.5 strip: channel-clawdtalk feature removed
+# Phase 1.5 strip: channel-acp-server feature removed
 channel-whatsapp-cloud = ["zeroclaw-channels/channel-whatsapp-cloud"]
-channel-voice-call = ["zeroclaw-channels/channel-voice-call"]
-channel-feishu = ["channel-lark"]
-whatsapp-web = ["zeroclaw-channels/whatsapp-web"]
-voice-wake = ["zeroclaw-channels/voice-wake"]
+# Phase 1.5 strip: channel-voice-call feature removed
+# Phase 1.5 strip: channel-feishu feature removed
+# Phase 1.5 strip: whatsapp-web feature removed
+# Phase 1.5 strip: voice-wake feature removed
 memory-postgres = ["zeroclaw-memory/memory-postgres"]
 
 # Backends and platform flags — each forwards to ONE crate

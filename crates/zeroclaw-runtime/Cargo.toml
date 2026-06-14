@@ -16,7 +16,7 @@ zeroclaw-tools.workspace = true
 # Phase 1.4: osagent-tools-mcp added because the MCP modules migrated here from
 # zeroclaw-tools. Wizard binary MUST NOT depend on zeroclaw-runtime in M3 unless
 # the runtime is split into core (no MCP) + mcp-glue (engineer-only).
-osagent-tools-mcp = { path = "../osagent-tools-mcp" }
+osagent-tools-mcp = { path = "../osagent-tools-mcp", version = "0.1.0" }
 zeroclaw-tool-call-parser.workspace = true
 fluent = "0.16"
 anyhow = "1.0"
