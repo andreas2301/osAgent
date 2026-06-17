@@ -16,27 +16,53 @@ A tailored fork of zeroclaw v0.7.5 producing two compile-time-separated binaries
 
 (None yet — ship to validate)
 
+### Validated
+
+<!-- Shipped and confirmed valuable. -->
+
+**M1 — Foundation (shipped 2026-06-17):**
+
+- ✓ **FORK-01 / FORK-02 / FORK-03** — Public fork live (`andreas2301/osAgent`), attribution preserved, UPSTREAM_SYNC.md runbook on `feat/osagent-upstream-sync-runbook` (sovereign-shield-backup PR awaiting merge), `cargo deny` enforces license + bans + advisory gates in CI — Phase 1.1
+- ✓ **WS-01 / WS-02 / WS-03 / WS-04 / WS-05** — Two-binary workspace, structural MCP exclusion (`osagent-tools-mcp` crate, wizard zero-MCP dep tree), 4-layer wizard-no-MCP CI gate green throughout, explicit registration (no `inventory!`/`linkme!`/`ctor`), default-features audit — Phases 1.2 + 1.3 (MILESTONE-DEFINING)
+- ✓ **STRIP-01 through STRIP-07** — 5 dead crates dropped (~16.2K LOC), 28 channels removed (6 kept), 9 providers removed (5 kept), 36 tools removed, gateway sub-surface stripped (`/ws/chat` + paired_tokens kept), webhook triple-removed, non-en locales stripped (Fluent pipeline kept) — Phases 1.4 + 1.5 + 1.6
+- ✓ **TELEMETRY-01** — `opentelemetry-otlp` + `observability-otel` + all phone-home patterns removed; `cargo deny` bans sentry/posthog/honeycomb — Phase 1.4
+- ✓ **MANIFEST-01 (scaffold) / MANIFEST-02 / MANIFEST-03** — `osagent-manifest` crate with `manifest_diff` API + 8 TDD tests; reproducibility profile pinned (`codegen-units=1`, `lto=fat`, `strip=symbols`, `panic=abort`, `CARGO_INCREMENTAL=0`) — Phase 1.5. **`build.rs` emission + binary `--manifest-diff` wiring deferred to M2** (Phase 2.x).
+- ✓ **INSTALL-01** — `install_osagent.yml` structural template on `feat/osagent-install-task` (sovereign-shield-install-guide PR), `meta:end_play` guard prevents premature production deploy — Phase 1.6
+
 ### Active
 
-<!-- Current scope. Building toward these in M1 (Foundation). M2/M3/M4 requirements added when those milestones start. -->
+<!-- Current scope. Building toward these in M2 (Engineer binary production-ready). -->
 
-**M1 — Foundation (this milestone):**
+## Current Milestone: v0.2-engineer (Engineer binary production-ready)
 
-- [ ] **FORK-01**: Public GitHub fork `andreas2301/osAgent` exists, attribution preserved (`LICENSE-APACHE`, `LICENSE-MIT`, `NOTICE` from upstream + osAgent `NOTICE`), branch `osagent-main` is the working branch
-- [ ] **FORK-02**: Quarterly upstream-sync runbook documented in `sovereign-shield-backup/documentation/osAgent/UPSTREAM_SYNC.md`
-- [ ] **WS-01**: Workspace builds with two binaries (`osagent-engineer`, `osagent-wizard`) via Cargo features (`engineer-bin`, `wizard-bin`); both binaries link the same shared crates; `cargo build --bin osagent-engineer --features engineer-bin` and the wizard variant both succeed
-- [ ] **WS-02**: CI gate enforces `nm osagent-wizard | grep -i mcp` returns empty (build fails otherwise)
-- [ ] **STRIP-01**: Whole crates dropped: `zeroclaw-hardware`, `robot-kit`, `aardvark-sys`, `apps/tauri`, `zeroclaw-plugins`. Workspace still compiles.
-- [ ] **STRIP-02**: 26-of-30 channels stripped (keep: Telegram, Slack, Mattermost, Matrix, WhatsApp-Cloud, Signal — others gated out at feature-flag and source level)
-- [ ] **STRIP-03**: ~50-of-60 providers stripped (keep: Anthropic, Gemini, Kimi-code via openai-compatible base, Ollama, OpenRouter)
-- [ ] **STRIP-04**: ~35-of-60 tools stripped (browser, web_search, web_fetch, hardware_*, weather, jira, notion, google_workspace, microsoft365, linkedin, composio, image_gen, canvas, claude_code_runner, swarm, gemini_cli, codex_cli, opencode_cli, project_intel, discord_search, http_request, pushover, reaction, llm_task, escalate, skillforge, skill_improve, skill_http, voice_*, screenshot)
-- [ ] **STRIP-05**: Gateway sub-surface dropped (REST endpoints config/onboarding/pairing/personality/plugins/webauthn, ACP bridge, SSE, embedded web dashboard, pairing dashboard UI, mTLS server option, outbound webhook endpoints) — **but `/ws/chat` endpoint and paired_tokens auth path KEPT** because OS-MDashboard's chat-relay depends on them
-- [ ] **STRIP-06**: Webhook channel explicitly NOT included (user rejected on security grounds — "rather build a custom osAgent update for a weird stack than overengineer and give the capabilities to get hacked")
-- [ ] **TELEMETRY-01**: Audit zeroclaw codebase for phone-home telemetry; strip all outbound metrics/error-reporting to third-party services; document findings
-- [ ] **MANIFEST-01**: Build emits `MANIFEST.toml` listing every compiled-in channel, provider, and tool; ships with each binary
-- [ ] **INSTALL-01**: `sovereign-shield-install-guide/ansible/install_osagent.yml` created as a drop-in replacement for `install_zeroclaw.yml`, structured for engineer-only at M1 (wizard still uses old zeroclaw until M3 ships)
+**Goal:** Fill the hollow `osagent-engineer` binary with the production runtime that lets it replace the current zeroclaw engineer install — native AMQP bridge, exchange channel, lifecycle gates, sqlcipher memory, hash-chained audit, Mattermost+Matrix runtime, channel roles, functional parity with current zeroclaw engineer + migration.
 
-**M2/M3/M4 — added when those milestones begin** (see ROADMAP.md for milestone scope).
+**Target features:**
+- Native Rust AMQP bridge tool (eliminates bash+python3 shell path)
+- Exchange channel with PLAN/MISSION/REPORT envelope schemas
+- Pause-gate/CancellationToken lifecycle primitives
+- SQLCipher-backed memory with customer-derived keys
+- Dual-sink hash-chained audit log (journald + per-customer file, daily witness anchor)
+- Mattermost + Matrix runtime channel implementations
+- `ops` vs `observer` per-channel role allowlist
+- Engineer functional-parity audit + install-guide cutover
+- Build-time MANIFEST.toml emission + binary `--manifest-diff` (deferred from M1 Phase 1.5)
+
+**M2 — Engineer binary production-ready (this milestone):**
+
+- [ ] **ENG-BRIDGE**: Native AMQP `bridge` tool (uses `lapin` 0.5 + manual `tokio-rustls` 0.27 with ServerName override `rabbitmq.shield.internal` SAN, dial `127.0.0.1`); operator allowlist (`/etc/zeroclaw/operator/allowlist.json`) validated at startup with fail-closed on missing. Replaces the bash-invoked engineer-amqp-bridge end-to-end.
+- [ ] **ENG-EXCHANGE**: First-class `exchange` channel (native PLAN/MISSION/REPORT envelope schemas, durable RMQ queues per customer, replaces the file-polling pattern in HEARTBEAT.md).
+- [ ] **ENG-LIFECYCLE**: Pause-marker + activation-marker daemon primitives; `CancellationToken` plumbed into every tool; Vault writes complete current transaction on pause and halt cleanly (no torn idempotency-keyed transactions).
+- [ ] **ENG-SQLCIPHER**: Memory backend on `rusqlite` + `bundled-sqlcipher-vendored-openssl`; encryption key derived from `customer_id + Vault-supplied salt`; cross-customer restore fails fast (open returns "file is not a database").
+- [ ] **ENG-AUDIT**: Hash-chained dual-sink audit log — `journald` + append-only file `/var/log/sovereign-shield/osagent-<customer_id>.audit`. Daily anchor cross-linked to witness's chain via `osagent-witness-anchor` invocation.
+- [ ] **ENG-CHANNELS-RT**: Mattermost runtime (in-house `reqwest` wrapper around v4 REST + WS) and Matrix runtime (`matrix-sdk` 0.18 — version bump from upstream 0.16).
+- [ ] **ENG-CHANNEL-ROLES**: `ops` (can trigger actions) vs `observer` (read-only) role allowlist per channel; enforced before tool dispatch (return refusal message, log unauthorized attempt to audit).
+- [ ] **ENG-PARITY**: Functional-parity audit vs current zeroclaw engineer (45-verb allowlist coverage, HEARTBEAT.md behaviors, scheduled-job semantics); engineer cutover in install-guide PR `feat/osagent-install-task` merged with binary URL + SHA256 set; smoke test on clean VM + upgrade-in-place.
+- [ ] **MIG-ENG**: install-guide ansible task swaps `install_zeroclaw.yml` → `install_osagent.yml` (engineer-only); existing engineer installs migrate on next ansible apply; old zeroclaw engineer service stopped + binary removed from PATH.
+- [ ] **MANIFEST-04**: `build.rs` emits `MANIFEST.toml` with `[declared]` (from `CARGO_FEATURE_*` env + dependency tree) AND `[detected]` (post-link `cargo bloat --crates` analysis); CI gate enforces `[declared] == [detected]`. Deferred from M1 Phase 1.5.
+- [ ] **MANIFEST-05**: `osagent engineer manifest --diff <config.toml>` CLI wiring — refuse-to-start on config/binary mismatch. Engineer binary only at M2 (wizard variant at M3).
+
+**M3 (wizard runtime + subagents) / M4 (channels + ops + provider routing + production rollout) — added when those milestones begin** (see ROADMAP.md for milestone scope).
 
 ### Out of Scope
 
@@ -166,4 +192,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-12 after initialization*
+*Last updated: 2026-06-17 after M1 closeout + M2 (v0.2-engineer) initialization*
