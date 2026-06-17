@@ -173,27 +173,59 @@ All M1 v1 requirements validated by shipping. See `.planning/v1-M1-MILESTONE-AUD
 
 ## Traceability (M2)
 
-Empty initially. Filled by roadmap creation.
+Mapped 2026-06-17 by `/gsd:roadmap`. Every M2 v1 requirement assigned to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENG-BRIDGE-01..04 | TBD | Pending |
-| ENG-EXCHANGE-01..03 | TBD | Pending |
-| ENG-LIFECYCLE-01..04 | TBD | Pending |
-| ENG-SQLCIPHER-01..04 | TBD | Pending |
-| ENG-AUDIT-01..04 | TBD | Pending |
-| ENG-CHANNELS-RT-01..03 | TBD | Pending |
-| ENG-CHANNEL-ROLES-01..03 | TBD | Pending |
-| MANIFEST-04 | TBD | Pending |
-| MANIFEST-05 | TBD | Pending |
-| ENG-PARITY-01..03 | TBD | Pending |
-| MIG-ENG-01..02 | TBD | Pending |
+| ENG-BRIDGE-01 | 2.1 | Pending |
+| ENG-BRIDGE-02 | 2.1 | Pending |
+| ENG-BRIDGE-03 | 2.1 | Pending |
+| ENG-BRIDGE-04 | 2.1 | Pending |
+| MANIFEST-04 | 2.1 | Pending |
+| ENG-SQLCIPHER-01 | 2.2 | Pending |
+| ENG-SQLCIPHER-02 | 2.2 | Pending |
+| ENG-SQLCIPHER-03 | 2.2 | Pending |
+| ENG-SQLCIPHER-04 | 2.2 | Pending |
+| ENG-AUDIT-01 | 2.3 | Pending |
+| ENG-AUDIT-02 | 2.3 | Pending |
+| ENG-AUDIT-03 | 2.3 | Pending |
+| ENG-AUDIT-04 | 2.3 | Pending |
+| ENG-LIFECYCLE-01 | 2.4 | Pending |
+| ENG-LIFECYCLE-02 | 2.4 | Pending |
+| ENG-LIFECYCLE-03 | 2.4 | Pending |
+| ENG-LIFECYCLE-04 | 2.4 | Pending |
+| ENG-EXCHANGE-01 | 2.5 | Pending |
+| ENG-EXCHANGE-02 | 2.5 | Pending |
+| ENG-EXCHANGE-03 | 2.5 | Pending |
+| ENG-CHANNELS-RT-01 | 2.6 | Pending |
+| ENG-CHANNELS-RT-02 | 2.6 | Pending |
+| ENG-CHANNELS-RT-03 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-01 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-02 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-03 | 2.6 | Pending |
+| MANIFEST-05 | 2.7 | Pending |
+| ENG-PARITY-01 | 2.8 | Pending |
+| ENG-PARITY-02 | 2.8 | Pending |
+| ENG-PARITY-03 | 2.8 | Pending |
+| MIG-ENG-01 | 2.9 | Pending |
+| MIG-ENG-02 | 2.9 | Pending |
 
 **Coverage:**
 - v1 (M2) requirements: 32 atomic (across 11 requirement groups)
-- Mapped to phases: 0 (pending roadmap creation)
-- Unmapped: 32 ⚠️ (will be 0 after roadmap)
+- Mapped to phases: 32 ✅
+- Unmapped: 0 ✅
+- Phases: 9 (2.1 → 2.9; within 6-9 expected band)
+
+**Sequencing notes (per M2-PRE-RESEARCH.md constraints #1–#9):**
+- 2.1 is the foundation (constraint #1) — every later phase depends on it directly or transitively
+- 2.2 ∥ 2.3 parallel-eligible (constraint #2)
+- 2.4 sequenced after 2.2 + 2.3 (constraint #3 — pause-mid-transaction needs encrypted memory + audit log)
+- 2.5 ∥ 2.6 parallel-eligible after 2.1 (constraints #4, #6)
+- 2.6 includes Mattermost+Matrix runtime + channel roles + gateway sub-surface coherent trim (constraint #5 + M1 closeout carry-over)
+- 2.7 (MANIFEST-05) after 2.1 (constraint #8 — needs main.rs subcommand routing + emitted manifest)
+- 2.8 (parity + smoke tests) after 2.1–2.7 (constraint #9)
+- 2.9 (migration cutover) strictly after 2.8 (constraint #9 — no migration without parity)
 
 ---
 *Requirements defined: 2026-06-12 (M1)*
-*Last updated: 2026-06-17 (M2 v0.2-engineer initialization, M1 closeout)*
+*Last updated: 2026-06-17 (M2 v0.2-engineer roadmap created, traceability filled)*
