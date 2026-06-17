@@ -121,6 +121,21 @@ use zeroclaw_memory::Memory;
 /// Callers can push additional tools (e.g. MCP wrappers) after construction.
 pub type DelegateParentToolsHandle = Arc<RwLock<Vec<Arc<dyn Tool>>>>;
 
+/// Phase 1.5 strip: CanvasTool was dropped (image-canvas UI; not shipping)
+/// but `zeroclaw-gateway` still references `CanvasStore` in ~14 call sites
+/// (struct fields + handler wiring). Keeping a zero-state stub here lets the
+/// gateway compile without re-introducing canvas functionality. The stub is
+/// constructed but never queried for state; all surviving canvas-store call
+/// paths are dead-code now and a follow-up phase trims them from the gateway.
+#[derive(Clone, Default)]
+pub struct CanvasStore;
+
+impl CanvasStore {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
 /// Thin wrapper that makes an `Arc<dyn Tool>` usable as `Box<dyn Tool>`.
 pub struct ArcToolRef(pub Arc<dyn Tool>);
 // ArcToolRef is the public constructor name for ArcToolWrapper
@@ -243,7 +258,6 @@ pub fn register_skill_tools(
 pub const BUILTIN_TOOL_INTEGRATIONS: &[(&str, &str)] = &[
     ("Shell", "Terminal command execution"),
     ("File System", "Read/write files"),
-    ("Weather", "Forecasts & conditions (wttr.in)"),
 ];
 
 /// Create full tool registry including memory tools and optional Composio
@@ -321,7 +335,20 @@ pub fn all_tools_with_runtime(
     Option<ChannelMapHandle>,
     Option<ChannelMapHandle>,
 ) {
-    let has_shell_access = runtime.has_shell_access();
+    // Phase 1.5 strip: the following args were consumed by tools we dropped
+    // (composio, browser, http_request, web_fetch, canvas). The function
+    // signature is kept stable because 5 external callers (gateway, channels
+    // orchestrator, agent, two loop_ paths) destructure the return tuple in
+    // place. Silence dead-arg warnings without renaming.
+    let _ = (
+        composio_key,
+        composio_entity_id,
+        browser_config,
+        http_config,
+        web_fetch_config,
+        canvas_store,
+    );
+    let _has_shell_access = runtime.has_shell_access();
     let runtime_kind = root_config.runtime.kind.as_str();
     let sandbox = create_sandbox(
         &root_config.security,
@@ -405,82 +432,16 @@ pub fn all_tools_with_runtime(
     // etc.) are also unreachable now; left in place to minimize diff churn,
     // a follow-up trims the config schema.
 
-    // Notion API tool (conditionally registered)
-    if root_config.notion.enabled {
-        let notion_api_key = if root_config.notion.api_key.trim().is_empty() {
-            std::env::var("NOTION_API_KEY").unwrap_or_default()
-        } else {
-            root_config.notion.api_key.trim().to_string()
-        };
-        if notion_api_key.trim().is_empty() {
-            tracing::warn!(
-                "Notion tool enabled but no API key found (set notion.api_key or NOTION_API_KEY env var)"
-            );
-        } else {
-            tool_arcs.push(Arc::new(NotionTool::new(notion_api_key, security.clone())));
-        }
-    }
-
-    // Jira integration (config-gated)
-    if root_config.jira.enabled {
-        let api_token = if root_config.jira.api_token.trim().is_empty() {
-            std::env::var("JIRA_API_TOKEN").unwrap_or_default()
-        } else {
-            root_config.jira.api_token.trim().to_string()
-        };
-        if api_token.trim().is_empty() {
-            tracing::warn!(
-                "Jira tool enabled but no API token found (set jira.api_token or JIRA_API_TOKEN env var)"
-            );
-        } else if root_config.jira.base_url.trim().is_empty() {
-            tracing::warn!("Jira tool enabled but jira.base_url is empty — skipping registration");
-        } else {
-            let email = root_config
-                .jira
-                .email
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from);
-            if email.is_some() {
-                tracing::info!("Jira tool: Cloud mode (API v3, Basic auth)");
-            } else {
-                tracing::info!("Jira tool: Server/DC mode (API v2, Bearer auth)");
-            }
-            tool_arcs.push(Arc::new(JiraTool::new(
-                root_config.jira.base_url.trim().to_string(),
-                email,
-                api_token,
-                root_config.jira.allowed_actions.clone(),
-                security.clone(),
-                root_config.jira.timeout_secs,
-            )));
-        }
-    }
-
-    // Project delivery intelligence
-    if root_config.project_intel.enabled {
-        tool_arcs.push(Arc::new(ProjectIntelTool::new(
-            root_config.project_intel.default_language.clone(),
-            root_config.project_intel.risk_sensitivity.clone(),
-        )));
-        // Report template tool — direct access to template engine
-        tool_arcs.push(Arc::new(ReportTemplateTool::new()));
-    }
+    // Phase 1.5 strip (pass 2): productivity / SaaS / CLI delegation tools removed
+    //   - NotionTool, JiraTool, ProjectIntelTool, ReportTemplateTool
+    //   - BackupTool, CloudOpsTool, CloudPatternsTool, GoogleWorkspaceTool
+    //   - ClaudeCodeTool, ClaudeCodeRunnerTool, CodexCliTool, GeminiCliTool, OpenCodeCliTool
+    // SecurityOpsTool + DataManagementTool kept (still in v1 tool surface).
 
     // MCSS Security Operations
     if root_config.security_ops.enabled {
         tool_arcs.push(Arc::new(SecurityOpsTool::new(
             root_config.security_ops.clone(),
-        )));
-    }
-
-    // Backup tool (enabled by default)
-    if root_config.backup.enabled {
-        tool_arcs.push(Arc::new(BackupTool::new(
-            workspace_dir.to_path_buf(),
-            root_config.backup.include_dirs.clone(),
-            root_config.backup.max_keep,
         )));
     }
 
@@ -492,81 +453,11 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // Cloud operations advisory tools (read-only analysis)
-    if root_config.cloud_ops.enabled {
-        tool_arcs.push(Arc::new(CloudOpsTool::new(root_config.cloud_ops.clone())));
-        tool_arcs.push(Arc::new(CloudPatternsTool::new()));
-    }
-
-    // Google Workspace CLI (gws) integration — requires shell access
-    if root_config.google_workspace.enabled && has_shell_access {
-        tool_arcs.push(Arc::new(GoogleWorkspaceTool::new(
-            security.clone(),
-            root_config.google_workspace.allowed_services.clone(),
-            root_config.google_workspace.allowed_operations.clone(),
-            root_config.google_workspace.credentials_path.clone(),
-            root_config.google_workspace.default_account.clone(),
-            root_config.google_workspace.rate_limit_per_minute,
-            root_config.google_workspace.timeout_secs,
-            root_config.google_workspace.audit_log,
-        )));
-    } else if root_config.google_workspace.enabled {
-        tracing::warn!(
-            "google_workspace: skipped registration because shell access is unavailable"
-        );
-    }
-
-    // Claude Code delegation tool
-    if root_config.claude_code.enabled {
-        tool_arcs.push(Arc::new(ClaudeCodeTool::new(
-            security.clone(),
-            root_config.claude_code.clone(),
-        )));
-    }
-
-    // Claude Code task runner with Slack progress and SSH handoff
-    if root_config.claude_code_runner.enabled {
-        let gateway_url = format!(
-            "http://{}:{}",
-            root_config.gateway.host, root_config.gateway.port
-        );
-        tool_arcs.push(Arc::new(ClaudeCodeRunnerTool::new(
-            security.clone(),
-            root_config.claude_code_runner.clone(),
-            gateway_url,
-        )));
-    }
-
-    // Codex CLI delegation tool
-    if root_config.codex_cli.enabled {
-        tool_arcs.push(Arc::new(CodexCliTool::new(
-            security.clone(),
-            root_config.codex_cli.clone(),
-        )));
-    }
-
-    // Gemini CLI delegation tool
-    if root_config.gemini_cli.enabled {
-        tool_arcs.push(Arc::new(GeminiCliTool::new(
-            security.clone(),
-            root_config.gemini_cli.clone(),
-        )));
-    }
-
-    // OpenCode CLI delegation tool
-    if root_config.opencode_cli.enabled {
-        tool_arcs.push(Arc::new(OpenCodeCliTool::new(
-            security.clone(),
-            root_config.opencode_cli.clone(),
-        )));
-    }
-
     // PDF extraction (feature-gated at compile time via rag-pdf)
     #[cfg(feature = "rag-pdf")]
     tool_arcs.push(Arc::new(PdfReadTool::new(security.clone())));
 
-    // Vision tools are always available
-    tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
+    // Phase 1.5 strip: ScreenshotTool removed (dropped tool surface).
     tool_arcs.push(Arc::new(ImageInfoTool::new(security.clone())));
 
     // Session tools share the channel orchestrator's backend via the
@@ -595,26 +486,7 @@ pub fn all_tools_with_runtime(
         //   tool_arcs.push(Arc::new(SessionDeleteTool::new(backend, security.clone())));
     }
 
-    // LinkedIn integration (config-gated)
-    if root_config.linkedin.enabled {
-        tool_arcs.push(Arc::new(LinkedInTool::new(
-            security.clone(),
-            workspace_dir.to_path_buf(),
-            root_config.linkedin.api_version.clone(),
-            root_config.linkedin.content.clone(),
-            root_config.linkedin.image.clone(),
-        )));
-    }
-
-    // Standalone image generation tool (config-gated)
-    if root_config.image_gen.enabled {
-        tool_arcs.push(Arc::new(ImageGenTool::new(
-            security.clone(),
-            workspace_dir.to_path_buf(),
-            root_config.image_gen.default_model.clone(),
-            root_config.image_gen.api_key_env.clone(),
-        )));
-    }
+    // Phase 1.5 strip: LinkedInTool + ImageGenTool removed (dropped tool surface).
 
     // Poll tool — always registered; uses late-bound channel map handle
     let channel_map_handle: ChannelMapHandle = Arc::new(RwLock::new(HashMap::new()));
@@ -635,95 +507,18 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(SopStatusTool::new(Arc::clone(&sop_engine))));
     }
 
-    if let Some(key) = composio_key
-        && !key.is_empty()
-    {
-        tool_arcs.push(Arc::new(ComposioTool::new(
-            key,
-            composio_entity_id,
-            security.clone(),
-        )));
-    }
-
-    // Emoji reaction tool — always registered; channel map populated later by start_channels.
-    let reaction_tool = ReactionTool::new(security.clone());
-    let reaction_handle = reaction_tool.channel_map_handle();
-    tool_arcs.push(Arc::new(reaction_tool));
+    // Phase 1.5 strip: ComposioTool removed.
+    // Phase 1.5 strip: ReactionTool + EscalateToHumanTool removed (in-band escalation; M2 will
+    // re-introduce a native AMQP escalation primitive via osagent-bridge). Their channel-map
+    // handles become None in the function's return tuple.
 
     // Interactive ask_user tool — always registered; channel map populated later by start_channels.
     let ask_user_tool = AskUserTool::new(security.clone());
     let ask_user_handle = ask_user_tool.channel_map_handle();
     tool_arcs.push(Arc::new(ask_user_tool));
 
-    // Human escalation tool — always registered; channel map populated later by start_channels.
-    let escalate_tool = EscalateToHumanTool::new(
-        security.clone(),
-        root_config.escalation.alert_channels.clone(),
-    );
-    let escalate_handle = escalate_tool.channel_map_handle();
-    tool_arcs.push(Arc::new(escalate_tool));
-
-    // Microsoft 365 Graph API integration
-    if root_config.microsoft365.enabled {
-        let ms_cfg = &root_config.microsoft365;
-        let tenant_id = ms_cfg
-            .tenant_id
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        let client_id = ms_cfg
-            .client_id
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if !tenant_id.is_empty() && !client_id.is_empty() {
-            // Fail fast: client_credentials flow requires a client_secret at registration time.
-            if ms_cfg.auth_flow.trim() == "client_credentials"
-                && ms_cfg
-                    .client_secret
-                    .as_deref()
-                    .is_none_or(|s| s.trim().is_empty())
-            {
-                tracing::error!(
-                    "microsoft365: client_credentials auth_flow requires a non-empty client_secret"
-                );
-                return (
-                    boxed_registry_from_arcs(tool_arcs),
-                    None,
-                    Some(reaction_handle),
-                    channel_map_handle,
-                    Some(ask_user_handle),
-                    Some(escalate_handle),
-                );
-            }
-
-            let resolved = zeroclaw_tools::microsoft365::types::Microsoft365ResolvedConfig {
-                tenant_id,
-                client_id,
-                client_secret: ms_cfg.client_secret.clone(),
-                auth_flow: ms_cfg.auth_flow.clone(),
-                scopes: ms_cfg.scopes.clone(),
-                token_cache_encrypted: ms_cfg.token_cache_encrypted,
-                user_id: ms_cfg.user_id.as_deref().unwrap_or("me").to_string(),
-            };
-            // Store token cache in the config directory (next to config.toml),
-            // not the workspace directory, to keep bearer tokens out of the
-            // project tree.
-            let cache_dir = root_config.config_path.parent().unwrap_or(workspace_dir);
-            match Microsoft365Tool::new(resolved, security.clone(), cache_dir) {
-                Ok(tool) => tool_arcs.push(Arc::new(tool)),
-                Err(e) => {
-                    tracing::error!("microsoft365: failed to initialize tool: {e}");
-                }
-            }
-        } else {
-            tracing::warn!(
-                "microsoft365: skipped registration because tenant_id or client_id is empty"
-            );
-        }
-    }
+    // Phase 1.5 strip: Microsoft365Tool removed (dropped tool surface; also removed the
+    // early-return branch that previously fired when client_credentials lacked a secret).
 
     // Knowledge graph tool
     if root_config.knowledge.enabled {
@@ -778,20 +573,11 @@ pub fn all_tools_with_runtime(
         Some(parent_tools)
     };
 
-    // Add swarm tool when swarms are configured
-    if !root_config.swarms.is_empty() {
-        let swarm_agents: HashMap<String, DelegateAgentConfig> = agents
-            .iter()
-            .map(|(name, cfg)| (name.clone(), cfg.clone()))
-            .collect();
-        tool_arcs.push(Arc::new(SwarmTool::new(
-            root_config.swarms.clone(),
-            swarm_agents,
-            delegate_fallback_credential,
-            security.clone(),
-            provider_runtime_options,
-        )));
-    }
+    // Phase 1.5 strip: SwarmTool removed (dropped tool surface).
+    // delegate_fallback_credential + provider_runtime_options remain in scope (used by
+    // the delegate_tool above when agents are configured); compiler will flag them as
+    // unused only if the delegate path is also not taken.
+    let _ = (&delegate_fallback_credential, &provider_runtime_options);
 
     // Workspace management tool (conditionally registered when workspace isolation is enabled)
     if root_config.workspace.enabled {
@@ -822,42 +608,7 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // ── WASM plugin tools (requires plugins-wasm feature) ──
-    #[cfg(feature = "plugins-wasm")]
-    {
-        let plugin_dir = config.plugins.plugins_dir.clone();
-        let plugin_path = if plugin_dir.starts_with("~/") {
-            let home = directories::UserDirs::new()
-                .map(|u| u.home_dir().to_path_buf())
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            home.join(plugin_dir.strip_prefix("~/").unwrap())
-        } else {
-            std::path::PathBuf::from(&plugin_dir)
-        };
-
-        if plugin_path.exists() && config.plugins.enabled {
-            match zeroclaw_plugins::host::PluginHost::new(
-                plugin_path.parent().unwrap_or(&plugin_path),
-            ) {
-                Ok(host) => {
-                    let details = host.tool_plugin_details();
-                    let count = details.len();
-                    for (manifest, wasm_path) in details {
-                        tool_arcs.push(Arc::new(zeroclaw_plugins::wasm_tool::WasmTool::from_wasm(
-                            wasm_path.to_path_buf(),
-                            manifest.permissions.clone(),
-                            manifest.name.clone(),
-                            manifest.description.clone().unwrap_or_default(),
-                        )));
-                    }
-                    tracing::info!("Loaded {count} WASM plugin tools");
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to load WASM plugins: {e}");
-                }
-            }
-        }
-    }
+    // Phase 1.4 strip: WASM plugin tools block removed (zeroclaw-plugins crate dropped).
 
     // Pipeline tool (execute_pipeline) — multi-step tool chaining.
     if root_config.pipeline.enabled {
@@ -871,10 +622,12 @@ pub fn all_tools_with_runtime(
     (
         boxed_registry_from_arcs(tool_arcs),
         delegate_handle,
-        Some(reaction_handle),
+        // Phase 1.5 strip: reaction_handle was for the dropped ReactionTool.
+        None,
         channel_map_handle,
         Some(ask_user_handle),
-        Some(escalate_handle),
+        // Phase 1.5 strip: escalate_handle was for the dropped EscalateToHumanTool.
+        None,
     )
 }
 
@@ -900,7 +653,10 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_excludes_browser_when_disabled() {
+    fn all_tools_includes_core_kept_tools() {
+        // Phase 1.5: browser/pushover removed from registration; verify the
+        // surviving "core" set is intact. The browser stack and pushover are
+        // now permanently absent from the registry regardless of config.
         let tmp = TempDir::new().unwrap();
         let security = Arc::new(SecurityPolicy::default());
         let mem_cfg = MemoryConfig {
@@ -910,12 +666,7 @@ mod tests {
         let mem: Arc<dyn Memory> =
             Arc::from(zeroclaw_memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
 
-        let browser = BrowserConfig {
-            enabled: false,
-            allowed_domains: vec!["example.com".into()],
-            session_name: None,
-            ..BrowserConfig::default()
-        };
+        let browser = BrowserConfig::default();
         let http = zeroclaw_config::schema::HttpRequestConfig::default();
         let cfg = test_config(&tmp);
 
@@ -935,54 +686,13 @@ mod tests {
             None,
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"browser_open"));
+        assert!(names.contains(&"content_search"));
         assert!(names.contains(&"schedule"));
         assert!(names.contains(&"model_routing_config"));
-        assert!(names.contains(&"pushover"));
         assert!(names.contains(&"proxy_config"));
-    }
-
-    #[test]
-    fn all_tools_includes_browser_when_enabled() {
-        let tmp = TempDir::new().unwrap();
-        let security = Arc::new(SecurityPolicy::default());
-        let mem_cfg = MemoryConfig {
-            backend: "markdown".into(),
-            ..MemoryConfig::default()
-        };
-        let mem: Arc<dyn Memory> =
-            Arc::from(zeroclaw_memory::create_memory(&mem_cfg, tmp.path(), None).unwrap());
-
-        let browser = BrowserConfig {
-            enabled: true,
-            allowed_domains: vec!["example.com".into()],
-            session_name: None,
-            ..BrowserConfig::default()
-        };
-        let http = zeroclaw_config::schema::HttpRequestConfig::default();
-        let cfg = test_config(&tmp);
-
-        let (tools, _, _, _, _, _) = all_tools(
-            Arc::new(Config::default()),
-            &security,
-            mem,
-            None,
-            None,
-            &browser,
-            &http,
-            &zeroclaw_config::schema::WebFetchConfig::default(),
-            tmp.path(),
-            &HashMap::new(),
-            None,
-            &cfg,
-            None,
-        );
-        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"browser_open"));
-        assert!(names.contains(&"content_search"));
-        assert!(names.contains(&"model_routing_config"));
-        assert!(names.contains(&"pushover"));
-        assert!(names.contains(&"proxy_config"));
+        // Confirm dropped tools really are absent at runtime.
+        assert!(!names.contains(&"browser_open"));
+        assert!(!names.contains(&"pushover"));
     }
 
     #[test]
