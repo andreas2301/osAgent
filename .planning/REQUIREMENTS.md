@@ -1,75 +1,75 @@
 # Requirements: osAgent
 
-**Defined:** 2026-06-12
+**Defined:** 2026-06-12 (M1)
+**Updated:** 2026-06-17 (M2 v0.2-engineer initialization)
 **Core Value:** Wizard cannot exfiltrate Vault secrets via an MCP server because the wizard binary has compile-time zero MCP, verified by a 4-layer CI gate (source-grep + `nm --defined-only` + `cargo-bloat --crates` + `strings`).
 
-This document scopes **M1 — Foundation** only. M2/M3/M4 requirements are listed under v2 with full enumeration of intent. They become M2/M3/M4 v1 requirements when those milestones begin via `/gsd:new-milestone`.
+This document scopes **M2 — v0.2-engineer** as the current milestone (v1 block). M3/M4 requirements remain in the v3/v4 blocks below (promoted when those milestones begin via `/gsd:new-milestone`).
 
 ---
 
-## v1 Requirements (M1 — Foundation)
+## v1 Requirements (M2 — Engineer binary production-ready)
 
-### Fork & Attribution
+### Native AMQP bridge
 
-- [ ] **FORK-01**: Public GitHub fork `andreas2301/osAgent` of `zeroclaw-labs/zeroclaw` exists, working branch is `osagent-main`, upstream remote configured for `git fetch upstream`. NOTICE preserves zeroclaw attribution + adds osAgent fork attribution; `LICENSE-APACHE` + `LICENSE-MIT` from upstream retained.
-- [ ] **FORK-02**: `sovereign-shield-backup/documentation/osAgent/UPSTREAM_SYNC.md` exists and documents the quarterly merge procedure: cadence (1st week of Q1/Q2/Q3/Q4), diff-stat budget per merge, conflict-resolution log format, out-of-cycle critical-security-fix criteria, append-only conflict log convention.
-- [ ] **FORK-03**: `cargo deny` is configured with: (a) license allowlist limited to MIT/Apache-2.0/BSD-2/BSD-3/ISC/Unicode-DFS-2016 — explicitly banning AGPL-3.0 (presage, libsignal-service, libsignal) and WTFPL (frankenstein); (b) advisory database current; (c) `cargo deny check` runs in CI on every PR.
+- [ ] **ENG-BRIDGE-01**: A standalone `osagent-bridge` crate (added to workspace members) exposes a native `bridge_call` tool. Implementation uses `lapin` 0.5 + manual `tokio-rustls` 0.27 stream for `ServerName` override (`rabbitmq.shield.internal` SAN, dial `127.0.0.1`).
+- [ ] **ENG-BRIDGE-02**: Operator allowlist (`/etc/zeroclaw/operator/allowlist.json`, 45-verb) is loaded at engineer startup; missing file fails the daemon closed (no fallback to permissive). All bridge calls validate verb against allowlist before publishing.
+- [ ] **ENG-BRIDGE-03**: `bridge_call` registered on the engineer binary tool registry; wizard binary does NOT register it (compile-time exclusion via crate membership).
+- [ ] **ENG-BRIDGE-04**: Bash + python3 + bridge shell wrapper chain (current zeroclaw approach via `shell_tool` + AMQP env vars) is removed from the engineer's tool set. Native tool is the only path.
 
-### Workspace Restructure (binary split)
+### Exchange channel
 
-- [ ] **WS-01**: Cargo workspace builds via `cargo build --workspace` with `resolver = "2"` pinned. Two binaries `osagent-engineer` and `osagent-wizard` build cleanly. Workspace contains a `bins/` directory with two ~50-LOC `main.rs` crates whose `Cargo.toml` is the human-readable manifest of compiled-in capabilities.
-- [ ] **WS-02**: **MCP exclusion is structural, not feature-flagged.** A dedicated crate `osagent-tools-mcp` (or similar name) holds all MCP code. `bins/wizard/Cargo.toml` has zero `mcp` references (no dependency, no feature, no optional, no cfg gate). The engineer's `Cargo.toml` explicitly depends on `osagent-tools-mcp`. Verified by reading the manifests in code review.
-- [ ] **WS-03**: 4-layer CI gate enforces wizard-no-MCP property on every PR and release build:
-  - Layer 1: `grep -r "mcp" bins/wizard/` and the wizard's `Cargo.toml` dependency tree returns no matches
-  - Layer 2: `nm --defined-only target/release/osagent-wizard | grep -i mcp` is empty
-  - Layer 3: `cargo bloat --crates --release --bin osagent-wizard` does not list any `mcp` crate
-  - Layer 4: `strings target/release/osagent-wizard | grep -iE "(mcp_|model.context.protocol)"` is empty
-  - All four layers must pass; any single failure breaks the build.
-- [ ] **WS-04**: Workspace uses **explicit registration** for channels/providers/tools (single `pub fn register(reg: &mut Registry)` entry point per crate, called from `bins/<binary>/main.rs`). NO use of `inventory!` / `linkme!` distributed-slice patterns (these defeat the structural exclusion via auto-discovery at link time).
-- [ ] **WS-05**: All workspace dependencies use `default-features = false` and explicit feature lists. Workspace inherits via `dep:` prefix-style declarations. Feature unification audit script (`cargo tree --duplicates`) runs in CI.
+- [ ] **ENG-EXCHANGE-01**: First-class `exchange` channel implementation: PLAN, MISSION, REPORT envelope schemas (typed Rust structs serialized as AMQP messages), durable per-customer RMQ queues, retry + dead-letter routing for malformed envelopes.
+- [ ] **ENG-EXCHANGE-02**: Replaces the file-polling pattern in HEARTBEAT.md (engineer no longer scans for `.plan` / `.mission` / `.report` files; receives them via exchange channel subscriptions).
+- [ ] **ENG-EXCHANGE-03**: Channel registers in `zeroclaw-channels` orchestrator; engineer config enables it via `[channels.exchange]`.
 
-### Strip Dead Surface (whole crates)
+### Lifecycle gates
 
-- [ ] **STRIP-01**: Workspace member list drops these upstream crates entirely: `zeroclaw-hardware`, `robot-kit`, `aardvark-sys`, `apps/tauri`, `zeroclaw-plugins`. Source directories removed. `cargo build --workspace` still succeeds.
-- [ ] **STRIP-02**: Channel implementations stripped to 6 (keep: Telegram, Slack, Mattermost, Matrix, WhatsApp-Cloud, Signal). 26 others removed at source level (Discord, IRC, Email/IMAP, Gmail-Push, voice-call, voice-wake, WhatsApp-Web/Selenium, Twitter, Reddit, Bluesky, Nostr, LINE, WeChat, WeCom, QQ, DingTalk, Lark, Feishu, ClawdTalk, Nextcloud, Linq, WATI, iMessage, MoChat, Notion, MQTT, ACP-server, **webhook**). Trait registry entries deleted.
-- [ ] **STRIP-03**: Provider implementations stripped to 5 (keep: Anthropic, Gemini, Kimi-code via OpenAI-compatible base, Ollama, OpenRouter). ~50 other providers removed at source level. `provider_aliases.rs` deleted.
-- [ ] **STRIP-04**: Tool implementations stripped (~35 tools removed): all browser tools, web_search, web_fetch, screenshot, weather, jira, notion, google_workspace, microsoft365, linkedin, composio, image_gen, canvas, hardware_*, claude_code_runner, swarm, claude_code, gemini_cli, codex_cli, opencode_cli, project_intel, discord_search, http_request, pushover, reaction, llm_task, escalate (in-band), skillforge, skill_improve, skill_http, voice_*.
-- [ ] **STRIP-05**: Gateway sub-surface stripped: REST endpoints (config, onboarding, pairing, personality, plugins, webauthn), ACP bridge, SSE, embedded web dashboard, pairing dashboard UI, mTLS server option, outbound webhook endpoints. **`/ws/chat` endpoint and `paired_tokens` auth path KEPT** (OS-MDashboard's `chat-relay.ts` depends on them). Gateway crate retained but trimmed to the minimal axum router.
-- [ ] **STRIP-06**: Webhook channel explicitly NOT included in v1 (user rejection on security grounds). Source code removed; `cargo deny` includes a check to prevent re-introduction without a documented decision.
-- [ ] **STRIP-07**: i18n Mozilla Fluent pipeline retained, non-en locales stripped (~12 translation files in `translations/` deleted). en-US `.ftl` files retained as the authoritative source.
+- [ ] **ENG-LIFECYCLE-01**: Daemon-level pause-marker file (`/var/lib/sovereign-shield/engineer.pause`) and activation-marker file (`/var/lib/sovereign-shield/engineer.active`) coordinate hot maintenance windows without daemon restart.
+- [ ] **ENG-LIFECYCLE-02**: `CancellationToken` plumbed into every tool's `execute` method via the existing `zeroclaw-runtime/src/agent/agent.rs` extension points. Pause sets the token; tools observe and halt cleanly.
+- [ ] **ENG-LIFECYCLE-03**: Vault-write tools that are mid-transaction at pause-time complete their current idempotency-keyed transaction (avoiding torn writes), then halt before starting any new write. Verified by integration test.
+- [ ] **ENG-LIFECYCLE-04**: Heartbeat + cron job semantics respect the pause-marker (no new jobs spawned while paused).
 
-### Telemetry & Manifest
+### SQLCipher memory
 
-- [ ] **TELEMETRY-01**: Audit zeroclaw codebase for phone-home patterns: search for `reqwest::Client::new` + `sentry::` + `posthog::` + `honeycomb::` + env-driven URLs (`SENTRY_DSN`, `POSTHOG_KEY`, etc.) + any outbound HTTPS to non-customer-controlled domains. Findings documented in `docs/telemetry-audit.md`. All identified phone-home paths removed. `cargo deny` updated to ban sentry / posthog / honeycomb / opentelemetry-exporter-otlp-http reqwest-based crates as direct deps.
-- [ ] **MANIFEST-01**: Build emits `MANIFEST.toml` listing every compiled-in channel, provider, and tool, with two sections:
-  - `[declared]`: derived from `CARGO_FEATURE_*` env vars and Cargo.toml dependency tree at build time
-  - `[detected]`: derived from post-link symbol analysis (`cargo bloat --crates`)
-  - A build-time CI check enforces `[declared] == [detected]`; any divergence is a CI failure (catches "feature was declared but code was orphaned" and "code was linked but not declared")
-- [ ] **MANIFEST-02**: `osagent manifest --diff <config.toml>` CLI subcommand validates that every channel/provider/tool referenced in the config exists in the binary's manifest. Refuse-to-start on mismatch (e.g., wizard config that references `[mcp]` when wizard binary's MANIFEST lacks MCP). Available on both binaries.
-- [ ] **MANIFEST-03**: Reproducible-build profile pinned: `[profile.release]` sets `codegen-units = 1`, `lto = "fat"`, `strip = "symbols"`, `panic = "abort"`. CI builds with `CARGO_INCREMENTAL=0`. Two-run byte-equality assertion in the release job (mitigates rust-lang/rust#150462 non-deterministic DCE).
+- [ ] **ENG-SQLCIPHER-01**: `zeroclaw-memory` SQLite backend rebuilt on `rusqlite` with `bundled-sqlcipher-vendored-openssl` feature (bundled = reproducible build).
+- [ ] **ENG-SQLCIPHER-02**: Encryption key derived from `customer_id + Vault-supplied salt` (PBKDF2 or scrypt; choice documented in implementation). Salt fetched from Vault at daemon start; key never persisted to disk.
+- [ ] **ENG-SQLCIPHER-03**: Cross-customer restore fails fast — opening a DB encrypted for customer A with customer B's key returns `SQLITE_NOTADB` immediately (verified by integration test with two fixture DBs).
+- [ ] **ENG-SQLCIPHER-04**: Migration path from existing plaintext SQLite memory: ansible task includes a one-shot re-encrypt step on first install (export, drop, re-create encrypted, re-import).
 
-### Install-Guide Drop-In
+### Audit hash-chain
 
-- [ ] **INSTALL-01**: `sovereign-shield-install-guide/ansible/install_osagent.yml` created as a structural template for the M2-completing engineer-binary install. Respects all 14 install-guide invariants (phase ordering, mTLS cert provisioning pattern, sandbox-allowed home-mirror cert paths, ExecStartPre preflight, AMQP env file pattern, pre-create audit log file before non-root daemon opens it). PR opened against `sovereign-shield-install-guide` main but NOT merged at M1 (engineer binary not yet at parity; merge happens at M2 close). Plan-then-execute discipline followed: a Touch/Change/Impact/Rollback plan posted in the PR description before any ansible file is touched.
+- [ ] **ENG-AUDIT-01**: Audit log dual-sink: every audit-tagged event writes to both `journald` (via `tracing-journald`) AND append-only file at `/var/log/sovereign-shield/osagent-<customer_id>.audit` (mode 0640, owned `engineer:audit`).
+- [ ] **ENG-AUDIT-02**: Each file-sink line carries a `prev_hash` field linking it to the previous line's hash (`sha256` of canonical-JSON event payload). Genesis line at daemon-start writes `prev_hash = "0" * 64`.
+- [ ] **ENG-AUDIT-03**: Daily cron triggers `osagent-witness-anchor` which submits the day's last `prev_hash` to ola-management-witness (anchor cross-link). Failure to anchor logs a critical event but does NOT halt the daemon.
+- [ ] **ENG-AUDIT-04**: Hash-chain verification tool `osagent engineer audit verify [--from <date>]` walks the chain and reports tampering. CI integration test seeds a corrupted chain to confirm detection.
+
+### Mattermost + Matrix runtime
+
+- [ ] **ENG-CHANNELS-RT-01**: Mattermost channel runtime — in-house `reqwest` wrapper around Mattermost v4 REST API + WebSocket for incoming events. Auth via personal access token (Vault-stored, rotated via M4's `OPS-ROTATE` later).
+- [ ] **ENG-CHANNELS-RT-02**: Matrix channel runtime upgraded from upstream `matrix-sdk` 0.16 → 0.18 (version bump; verify breaking-change matrix against M1's existing matrix.rs in `zeroclaw-channels`). E2E-encrypted rooms supported.
+- [ ] **ENG-CHANNELS-RT-03**: Both channels integrate with the M1 `AskUserTool` channel-map handle (already wired to receive populated handles at orchestrator start).
+
+### Channel roles
+
+- [ ] **ENG-CHANNEL-ROLES-01**: Per-channel role allowlist: `ops` (can trigger tool calls + decisions) and `observer` (read-only — receives notifications, cannot trigger). Config schema additions to `zeroclaw-channels`.
+- [ ] **ENG-CHANNEL-ROLES-02**: Role enforced at tool-dispatch time (NOT at LLM-prompt time — defense in depth). Unauthorized attempt returns a refusal message AND logs the attempt to audit log with caller identity + attempted tool name.
+- [ ] **ENG-CHANNEL-ROLES-03**: Default role for unspecified identities is `observer` (deny-by-default).
+
+### Build-time MANIFEST emission (deferred from M1 Phase 1.5)
+
+- [ ] **MANIFEST-04**: `build.rs` in each binary crate (`bins/engineer`, `bins/wizard`) emits `MANIFEST.toml` to `target/release/MANIFEST-<binary>.toml`. `[declared]` section derived from `CARGO_FEATURE_*` env vars + Cargo.toml direct deps. `[detected]` section derived from `cargo bloat --crates --release --bin <binary>` JSON output. CI gate enforces `[declared] == [detected]` per binary.
+- [ ] **MANIFEST-05**: Binary subcommand `osagent {engineer,wizard} manifest --diff <config.toml>` validates that every channel/provider/tool referenced in config exists in the binary's `MANIFEST.toml`. Refuse-to-start (exit 1) on mismatch. Wired into engineer's `main.rs` at M2; wizard's at M3.
+
+### Engineer parity + migration
+
+- [ ] **ENG-PARITY-01**: Functional-parity audit document `.planning/M2-PARITY-AUDIT.md` enumerates: every current-zeroclaw-engineer capability (45-verb allowlist coverage, HEARTBEAT.md behaviors, scheduled-job semantics, life-config integration points from `ola-host-engineer-config`); for each, status = ✅ implemented in osagent-engineer / ⚠️ gap / ❌ not in scope (with reason). Zero ⚠️ before MIG-ENG can fire.
+- [ ] **ENG-PARITY-02**: End-to-end smoke test: deploy `osagent-engineer` to a clean Ubuntu 22.04 VM via `install_osagent.yml`, run all 45 bridge verbs once, verify journald + audit file entries, verify SQLCipher memory persists across restart. Test fixture committed to `tests/e2e/`.
+- [ ] **ENG-PARITY-03**: Upgrade-in-place smoke test: same as ENG-PARITY-02 but starting from a VM already running zeroclaw engineer. Verify migration succeeds without data loss; verify zeroclaw service stopped + binary removed from `/usr/local/bin/`.
+- [ ] **MIG-ENG-01**: `sovereign-shield-install-guide/ansible/install_osagent.yml` PR (`feat/osagent-install-task`) updated with binary URL + SHA256 once `osagent-engineer` v0.2 release is published; `meta:end_play` guard removed; PR ships and merges.
+- [ ] **MIG-ENG-02**: install-guide engineer task swapped from `install_zeroclaw.yml` reference to `install_osagent.yml` reference in the playbook; old reference deleted (not commented). Old zeroclaw engineer binary symlink `/usr/local/bin/zeroclaw` purged.
 
 ---
-
-## v2 Requirements (M2 — Engineer binary production-ready)
-
-Deferred to M2. Tracked for visibility.
-
-### Engineer runtime additions
-- **ENG-BRIDGE**: Native AMQP `bridge` tool replaces shell-invoked engineer-amqp-bridge. Uses `lapin` with manual `tokio-rustls` stream for ServerName override (`rabbitmq.shield.internal` SAN, dial `127.0.0.1`). Operator allowlist (`/etc/zeroclaw/operator/allowlist.json`) validated at startup, fail-closed if missing.
-- **ENG-EXCHANGE**: First-class `exchange` channel implementation. Native PLAN/MISSION/REPORT envelope schemas. Replaces ad-hoc file-polling in HEARTBEAT.md.
-- **ENG-LIFECYCLE**: Pause-marker and activation-marker as daemon primitives. CancellationToken passed into every tool. Vault writes complete current transaction on pause then halt.
-- **ENG-SQLCIPHER**: Memory backend uses `rusqlite` + `bundled-sqlcipher-vendored-openssl`. Key derived from `customer_id + vault-supplied-salt`. Cross-customer memory restore fails fast.
-- **ENG-AUDIT**: Hash-chained dual-sink audit log: journald + append-only file per customer at `/var/log/sovereign-shield/osagent-<customer_id>.audit`. Daily anchor cross-linked to witness's chain.
-- **ENG-CHANNELS-RT**: Mattermost (in-house `reqwest` wrapper around v4 REST + WS) and Matrix (`matrix-sdk` 0.18) channel runtime implementations.
-- **ENG-CHANNEL-ROLES**: `ops` (can trigger actions) vs `observer` (read-only) role allowlist per channel.
-- **ENG-PARITY**: Functional parity audit with current zeroclaw engineer; engineer cutover in install-guide; production deployment.
-
-### Engineer migration
-- **MIG-ENG**: install-guide ansible task swapped from `install_zeroclaw.yml` to `install_osagent.yml` (engineer-only). Existing engineer installs migrate on next ansible apply. Validation: smoke test passes on clean VM AND on upgrade-in-place.
 
 ## v3 Requirements (M3 — Wizard binary + subagent system)
 
@@ -110,7 +110,7 @@ Deferred to M4.
 ### Operational CLIs
 - **OPS-RESCUE**: `osagent-rescue` CLI: same operator allowlist, no LLM, direct AMQP. Saves you when daemon is crash-looping at 3am.
 - **OPS-ROTATE**: `osagent rotate-channel-secret` CLI (see CHAN-ROTATE).
-- **OPS-MANIFEST**: `osagent manifest --diff` CLI (see MANIFEST-02; first shipped at M1 but extended in M4 for the wizard-binary case).
+- **OPS-MANIFEST**: `osagent manifest --diff` CLI extended to wizard binary case (M2 ships engineer-only via MANIFEST-05).
 
 ### Documentation & production rollout
 - **DOC-FULL**: `sovereign-shield-backup/documentation/osAgent/` complete: architecture, bootstrap, approval flow, audit format, subagent spec, rotation runbook, rescue runbook, upstream sync runbook, channel onboarding per customer. Arc42 numbering convention.
@@ -119,6 +119,8 @@ Deferred to M4.
 ---
 
 ## Out of Scope
+
+(Unchanged from M1 — all M1 boundaries remain valid M2 boundaries.)
 
 | Feature | Reason |
 |---------|--------|
@@ -140,38 +142,90 @@ Deferred to M4.
 
 ---
 
-## Traceability
+## Validated Requirements (M1 — Foundation, shipped 2026-06-17)
 
-Empty initially. Filled by roadmap creation.
+All M1 v1 requirements validated by shipping. See `.planning/v1-M1-MILESTONE-AUDIT.md` and PROJECT.md's Validated section for the full closeout.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FORK-01 | Phase 1.1 | Pending |
-| FORK-02 | Phase 1.1 | Pending |
-| FORK-03 | Phase 1.1 | Pending |
-| WS-01 | Phase 1.2 | Pending |
-| WS-02 | Phase 1.3 | Pending |
-| WS-03 | Phase 1.3 | Pending |
-| WS-04 | Phase 1.2 | Pending |
-| WS-05 | Phase 1.2 | Pending |
-| STRIP-01 | Phase 1.4 | Pending |
-| STRIP-02 | Phase 1.5 | Pending |
-| STRIP-03 | Phase 1.5 | Pending |
-| STRIP-04 | Phase 1.5 | Pending |
-| STRIP-05 | Phase 1.6 | Pending |
-| STRIP-06 | Phase 1.4 | Pending |
-| STRIP-07 | Phase 1.5 | Pending |
-| TELEMETRY-01 | Phase 1.4 | Pending |
-| MANIFEST-01 | Phase 1.5 | Pending |
-| MANIFEST-02 | Phase 1.5 | Pending |
-| MANIFEST-03 | Phase 1.5 | Pending |
-| INSTALL-01 | Phase 1.6 | Pending |
-
-**Coverage:**
-- v1 (M1) requirements: 20 total
-- Mapped to phases: 20
-- Unmapped: 0 ✓
+| FORK-01 | 1.1 | ✅ Complete |
+| FORK-02 | 1.1 | ✅ Complete (PR awaiting merge) |
+| FORK-03 | 1.1 | ✅ Complete |
+| WS-01 | 1.2 | ✅ Complete |
+| WS-02 | 1.3 | ✅ Complete (MILESTONE-DEFINING) |
+| WS-03 | 1.3 | ✅ Complete (4-layer gate green) |
+| WS-04 | 1.2 | ✅ Complete |
+| WS-05 | 1.2 | ✅ Complete |
+| STRIP-01 | 1.4 | ✅ Complete |
+| STRIP-02 | 1.5 | ✅ Complete |
+| STRIP-03 | 1.5 | ✅ Complete |
+| STRIP-04 | 1.5 | ✅ Complete |
+| STRIP-05 | 1.6 | ✅ Complete |
+| STRIP-06 | 1.4 | ✅ Complete |
+| STRIP-07 | 1.5 | ✅ Complete |
+| TELEMETRY-01 | 1.4 | ✅ Complete |
+| MANIFEST-01 | 1.5 | ⚠️ Scaffold complete; build.rs emission rolled into M2 MANIFEST-04 |
+| MANIFEST-02 | 1.5 | ⚠️ Crate API complete; binary wiring rolled into M2 MANIFEST-05 |
+| MANIFEST-03 | 1.5 | ✅ Complete (reproducibility profile pinned) |
+| INSTALL-01 | 1.6 | ✅ Complete (PR awaiting M2 binary URL + SHA256) |
 
 ---
-*Requirements defined: 2026-06-12*
-*Last updated: 2026-06-12 after initialization (incorporates 4-researcher findings + 3 cross-cutting refinements)*
+
+## Traceability (M2)
+
+Mapped 2026-06-17 by `/gsd:roadmap`. Every M2 v1 requirement assigned to exactly one phase.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| ENG-BRIDGE-01 | 2.1 | Pending |
+| ENG-BRIDGE-02 | 2.1 | Pending |
+| ENG-BRIDGE-03 | 2.1 | Pending |
+| ENG-BRIDGE-04 | 2.1 | Pending |
+| MANIFEST-04 | 2.1 | Pending |
+| ENG-SQLCIPHER-01 | 2.2 | Pending |
+| ENG-SQLCIPHER-02 | 2.2 | Pending |
+| ENG-SQLCIPHER-03 | 2.2 | Pending |
+| ENG-SQLCIPHER-04 | 2.2 | Pending |
+| ENG-AUDIT-01 | 2.3 | Pending |
+| ENG-AUDIT-02 | 2.3 | Pending |
+| ENG-AUDIT-03 | 2.3 | Pending |
+| ENG-AUDIT-04 | 2.3 | Pending |
+| ENG-LIFECYCLE-01 | 2.4 | Pending |
+| ENG-LIFECYCLE-02 | 2.4 | Pending |
+| ENG-LIFECYCLE-03 | 2.4 | Pending |
+| ENG-LIFECYCLE-04 | 2.4 | Pending |
+| ENG-EXCHANGE-01 | 2.5 | Pending |
+| ENG-EXCHANGE-02 | 2.5 | Pending |
+| ENG-EXCHANGE-03 | 2.5 | Pending |
+| ENG-CHANNELS-RT-01 | 2.6 | Pending |
+| ENG-CHANNELS-RT-02 | 2.6 | Pending |
+| ENG-CHANNELS-RT-03 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-01 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-02 | 2.6 | Pending |
+| ENG-CHANNEL-ROLES-03 | 2.6 | Pending |
+| MANIFEST-05 | 2.7 | Pending |
+| ENG-PARITY-01 | 2.8 | Pending |
+| ENG-PARITY-02 | 2.8 | Pending |
+| ENG-PARITY-03 | 2.8 | Pending |
+| MIG-ENG-01 | 2.9 | Pending |
+| MIG-ENG-02 | 2.9 | Pending |
+
+**Coverage:**
+- v1 (M2) requirements: 32 atomic (across 11 requirement groups)
+- Mapped to phases: 32 ✅
+- Unmapped: 0 ✅
+- Phases: 9 (2.1 → 2.9; within 6-9 expected band)
+
+**Sequencing notes (per M2-PRE-RESEARCH.md constraints #1–#9):**
+- 2.1 is the foundation (constraint #1) — every later phase depends on it directly or transitively
+- 2.2 ∥ 2.3 parallel-eligible (constraint #2)
+- 2.4 sequenced after 2.2 + 2.3 (constraint #3 — pause-mid-transaction needs encrypted memory + audit log)
+- 2.5 ∥ 2.6 parallel-eligible after 2.1 (constraints #4, #6)
+- 2.6 includes Mattermost+Matrix runtime + channel roles + gateway sub-surface coherent trim (constraint #5 + M1 closeout carry-over)
+- 2.7 (MANIFEST-05) after 2.1 (constraint #8 — needs main.rs subcommand routing + emitted manifest)
+- 2.8 (parity + smoke tests) after 2.1–2.7 (constraint #9)
+- 2.9 (migration cutover) strictly after 2.8 (constraint #9 — no migration without parity)
+
+---
+*Requirements defined: 2026-06-12 (M1)*
+*Last updated: 2026-06-17 (M2 v0.2-engineer roadmap created, traceability filled)*
