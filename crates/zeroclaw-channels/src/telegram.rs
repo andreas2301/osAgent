@@ -377,15 +377,8 @@ pub struct TelegramChannel {
     /// Base URL for the Telegram Bot API. Defaults to `https://api.telegram.org`.
     /// Override for local Bot API servers or testing.
     api_base: String,
-    transcription: Option<zeroclaw_config::schema::TranscriptionConfig>,
-    transcription_manager: Option<std::sync::Arc<super::transcription::TranscriptionManager>>,
-    voice_transcriptions: Mutex<std::collections::HashMap<String, String>>,
     workspace_dir: Option<std::path::PathBuf>,
     ack_reactions: bool,
-    tts_config: Option<zeroclaw_config::schema::TtsConfig>,
-    voice_chats: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    pending_voice:
-        Arc<std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>>,
     /// Per-channel proxy URL override.
     proxy_url: Option<String>,
     /// Pre-computed tool command specs (name, description) for bot command registration.
@@ -439,14 +432,8 @@ impl TelegramChannel {
             mention_only,
             bot_username: Mutex::new(None),
             api_base: "https://api.telegram.org".to_string(),
-            transcription: None,
-            transcription_manager: None,
-            voice_transcriptions: Mutex::new(std::collections::HashMap::new()),
             workspace_dir: None,
             ack_reactions: true,
-            tts_config: None,
-            voice_chats: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-            pending_voice: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             proxy_url: None,
             tool_command_specs: Vec::new(),
             pending_approvals: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
@@ -499,36 +486,6 @@ impl TelegramChannel {
     /// Useful for local Bot API servers or testing.
     pub fn with_api_base(mut self, api_base: String) -> Self {
         self.api_base = api_base;
-        self
-    }
-
-    /// Configure voice transcription.
-    pub fn with_transcription(
-        mut self,
-        config: zeroclaw_config::schema::TranscriptionConfig,
-    ) -> Self {
-        if !config.enabled {
-            return self;
-        }
-        match super::transcription::TranscriptionManager::new(&config) {
-            Ok(m) => {
-                self.transcription_manager = Some(std::sync::Arc::new(m));
-                self.transcription = Some(config);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "transcription manager init failed, voice transcription disabled: {e}"
-                );
-            }
-        }
-        self
-    }
-
-    /// Configure text-to-speech for outgoing voice replies.
-    pub fn with_tts(mut self, config: zeroclaw_config::schema::TtsConfig) -> Self {
-        if config.enabled {
-            self.tts_config = Some(config);
-        }
         self
     }
 
@@ -772,51 +729,6 @@ impl TelegramChannel {
                 tracing::warn!("Failed to register Telegram bot commands: {e}");
             }
         }
-    }
-
-    /// Synthesize text to speech and send as a Telegram voice note (static version for spawned tasks).
-    async fn synthesize_and_send_voice(
-        api_base: &str,
-        bot_token: &str,
-        chat_id: &str,
-        thread_id: Option<&str>,
-        text: &str,
-        tts_config: &zeroclaw_config::schema::TtsConfig,
-    ) -> anyhow::Result<()> {
-        let tts_manager = crate::tts::TtsManager::new(tts_config)?;
-        let audio_bytes = tts_manager.synthesize(text).await?;
-        let audio_len = audio_bytes.len();
-        tracing::info!("Telegram TTS: synthesized {audio_len} bytes of audio");
-
-        if audio_bytes.is_empty() {
-            anyhow::bail!("TTS returned empty audio");
-        }
-
-        let url = format!("{api_base}/bot{bot_token}/sendVoice");
-        let client = zeroclaw_config::schema::build_runtime_proxy_client("channel.telegram");
-
-        let mut form = reqwest::multipart::Form::new()
-            .text("chat_id", chat_id.to_string())
-            .part(
-                "voice",
-                reqwest::multipart::Part::bytes(audio_bytes)
-                    .file_name("voice.ogg")
-                    .mime_str("audio/ogg")?,
-            );
-
-        if let Some(tid) = thread_id {
-            form = form.text("message_thread_id", tid.to_string());
-        }
-
-        let resp = client.post(&url).multipart(form).send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("sendVoice failed: status={status}, body={body}");
-        }
-
-        tracing::info!("Telegram TTS: sent voice note ({audio_len} bytes)");
-        Ok(())
     }
 
     async fn classify_edit_message_response(resp: reqwest::Response) -> EditMessageResult {
@@ -1356,137 +1268,6 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         })
     }
 
-    /// Attempt to parse a Telegram update as a voice message and transcribe it.
-    ///
-    /// Returns `None` if the message is not a voice message, transcription is disabled,
-    /// or the message exceeds duration limits.
-    async fn try_parse_voice_message(&self, update: &serde_json::Value) -> Option<ChannelMessage> {
-        let config = self.transcription.as_ref()?;
-        let manager = self.transcription_manager.as_deref()?;
-        let message = update.get("message")?;
-
-        let (file_id, duration) = Self::parse_voice_metadata(message)?;
-
-        if duration > config.max_duration_secs {
-            tracing::info!(
-                "Skipping voice message: duration {duration}s exceeds limit {}s",
-                config.max_duration_secs
-            );
-            return None;
-        }
-
-        let (username, sender_id, sender_identity) = Self::extract_sender_info(message);
-
-        let mut identities = vec![username.as_str()];
-        if let Some(id) = sender_id.as_deref() {
-            identities.push(id);
-        }
-
-        if !self.is_any_user_allowed(identities.iter().copied()) {
-            return None;
-        }
-
-        let chat_id = message
-            .get("chat")
-            .and_then(|chat| chat.get("id"))
-            .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string())?;
-
-        let message_id = message
-            .get("message_id")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
-
-        let thread_id = message
-            .get("message_thread_id")
-            .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string());
-
-        let reply_target = if let Some(ref tid) = thread_id {
-            format!("{}:{}", chat_id, tid)
-        } else {
-            chat_id.clone()
-        };
-
-        // Download and transcribe
-        let file_path = match self.get_file_path(&file_id).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("Failed to get voice file path: {e}");
-                return None;
-            }
-        };
-
-        let file_name = file_path
-            .rsplit('/')
-            .next()
-            .unwrap_or("voice.ogg")
-            .to_string();
-
-        let audio_data = match self.download_file(&file_path).await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("Failed to download voice file: {e}");
-                return None;
-            }
-        };
-
-        let text = match manager.transcribe(&audio_data, &file_name).await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!("Voice transcription failed: {e}");
-                return None;
-            }
-        };
-
-        if text.trim().is_empty() {
-            tracing::info!("Voice transcription returned empty text, skipping");
-            return None;
-        }
-
-        // Enter voice-chat mode so outgoing replies get a TTS voice note
-        if let Ok(mut vc) = self.voice_chats.lock() {
-            vc.insert(reply_target.clone());
-        }
-
-        // Cache transcription for reply-context lookups
-        {
-            let mut cache = self.voice_transcriptions.lock();
-            if cache.len() >= 100 {
-                cache.clear();
-            }
-            cache.insert(format!("{chat_id}:{message_id}"), text.clone());
-        }
-
-        let content = if let Some(quote) = self.extract_reply_context(message) {
-            format!("{quote}\n\n[Voice] {text}")
-        } else {
-            format!("[Voice] {text}")
-        };
-
-        // Prepend forwarding attribution when the message was forwarded
-        let content = if let Some(attr) = Self::format_forward_attribution(message) {
-            format!("{attr}{content}")
-        } else {
-            content
-        };
-
-        Some(ChannelMessage {
-            id: format!("telegram_{chat_id}_{message_id}"),
-            sender: sender_identity,
-            reply_target,
-            content,
-            channel: "telegram".to_string(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            thread_ts: thread_id,
-            interruption_scope_id: None,
-            attachments: vec![],
-        })
-    }
-
     /// Extract sender username and display identity from a Telegram message object.
     fn extract_sender_info(message: &serde_json::Value) -> (String, Option<String>, String) {
         let username = message
@@ -1578,20 +1359,7 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         let reply_text = if let Some(text) = reply.get("text").and_then(serde_json::Value::as_str) {
             text.to_string()
         } else if reply.get("voice").is_some() || reply.get("audio").is_some() {
-            let reply_mid = reply.get("message_id").and_then(serde_json::Value::as_i64);
-            let chat_id = message
-                .get("chat")
-                .and_then(|c| c.get("id"))
-                .and_then(serde_json::Value::as_i64);
-            if let (Some(mid), Some(cid)) = (reply_mid, chat_id) {
-                self.voice_transcriptions
-                    .lock()
-                    .get(&format!("{cid}:{mid}"))
-                    .map(|t| format!("[Voice] {t}"))
-                    .unwrap_or_else(|| "[Voice message]".to_string())
-            } else {
-                "[Voice message]".to_string()
-            }
+            "[Voice message]".to_string()
         } else if reply.get("photo").is_some() {
             "[Photo]".to_string()
         } else if reply.get("document").is_some() {
@@ -1686,11 +1454,6 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         } else {
             content
         };
-
-        // Exit voice-chat mode when user switches back to typing
-        if let Ok(mut vc) = self.voice_chats.lock() {
-            vc.remove(&reply_target);
-        }
 
         Some(ChannelMessage {
             id: format!("telegram_{chat_id}_{message_id}"),
@@ -2867,84 +2630,6 @@ impl Channel for TelegramChannel {
             None => (message.recipient.as_str(), None),
         };
 
-        // Voice chat mode: send text normally AND queue a voice note of the
-        // final answer. Text in → text out. Voice in → text + voice out.
-        let is_voice_chat = self
-            .voice_chats
-            .lock()
-            .map(|vs| vs.contains(&message.recipient))
-            .unwrap_or(false);
-
-        if is_voice_chat && self.tts_config.is_some() {
-            // Only queue substantive natural-language replies for voice.
-            // Skip tool outputs: URLs, JSON, code blocks, errors, short status.
-            let is_substantive = content.len() > 40
-                && !content.starts_with("http")
-                && !content.starts_with('{')
-                && !content.starts_with('[')
-                && !content.starts_with("Error")
-                && !content.contains("```")
-                && !content.contains("tool_call")
-                && !content.contains("wttr.in");
-
-            if is_substantive {
-                if let Ok(mut pv) = self.pending_voice.lock() {
-                    pv.insert(
-                        message.recipient.clone(),
-                        (content.clone(), std::time::Instant::now()),
-                    );
-                }
-
-                let pending = self.pending_voice.clone();
-                let voice_chats = self.voice_chats.clone();
-                let api_base = self.api_base.clone();
-                let bot_token = self.bot_token.clone();
-                let chat_id_owned = chat_id.to_string();
-                let thread_id_owned = thread_id.map(str::to_string);
-                let recipient = message.recipient.clone();
-                let tts_config = self.tts_config.clone().unwrap();
-                tokio::spawn(async move {
-                    // Wait 10 seconds — long enough for the agent to finish its
-                    // full tool chain and send the final answer.
-                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
-                    // Atomic check-and-remove: only one task gets the value
-                    let to_voice = pending.lock().ok().and_then(|mut pv| {
-                        if let Some((_, ts)) = pv.get(&recipient)
-                            && ts.elapsed().as_secs() >= 8
-                        {
-                            return pv.remove(&recipient).map(|(text, _)| text);
-                        }
-                        None
-                    });
-
-                    if let Some(text) = to_voice {
-                        if let Ok(mut vc) = voice_chats.lock() {
-                            vc.remove(&recipient);
-                        }
-                        match Self::synthesize_and_send_voice(
-                            &api_base,
-                            &bot_token,
-                            &chat_id_owned,
-                            thread_id_owned.as_deref(),
-                            &text,
-                            &tts_config,
-                        )
-                        .await
-                        {
-                            Ok(()) => {
-                                tracing::info!("Telegram: voice reply sent ({} chars)", text.len());
-                            }
-                            Err(e) => {
-                                tracing::warn!("Telegram: TTS voice reply failed: {e}");
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // Always send text reply (voice chat gets both text and voice)
         let (text_without_markers, attachments) = parse_attachment_markers(&content);
 
         if !attachments.is_empty() {
@@ -3187,8 +2872,6 @@ Ensure only one `zeroclaw` process is using this bot token."
                     }
 
                     let msg = if let Some(m) = self.parse_update_message(update) {
-                        m
-                    } else if let Some(m) = self.try_parse_voice_message(update).await {
                         m
                     } else if let Some(m) = self.try_parse_attachment_message(update).await {
                         m
@@ -4700,25 +4383,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_reply_context_voice_with_cached_transcription() {
-        let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
-        // Pre-populate transcription cache
-        ch.voice_transcriptions
-            .lock()
-            .insert("100:42".to_string(), "Hello from voice".to_string());
-        let msg = serde_json::json!({
-            "chat": { "id": 100 },
-            "reply_to_message": {
-                "message_id": 42,
-                "from": { "username": "bob" },
-                "voice": { "file_id": "abc", "duration": 5 }
-            }
-        });
-        let ctx = ch.extract_reply_context(&msg).unwrap();
-        assert_eq!(ctx, "> @bob:\n> [Voice] Hello from voice");
-    }
-
-    #[test]
     fn parse_update_message_includes_reply_context() {
         let ch = TelegramChannel::new("t".into(), vec!["*".into()], false);
         let update = serde_json::json!({
@@ -4746,180 +4410,6 @@ mod tests {
         assert!(
             parsed.content.contains("Bonjour le monde"),
             "content should contain quoted text"
-        );
-    }
-
-    #[test]
-    fn with_transcription_sets_config_when_enabled() {
-        let tc = zeroclaw_config::schema::TranscriptionConfig {
-            enabled: true,
-            api_key: Some("test_key".to_string()),
-            ..zeroclaw_config::schema::TranscriptionConfig::default()
-        };
-
-        let ch =
-            TelegramChannel::new("token".into(), vec!["*".into()], false).with_transcription(tc);
-        assert!(ch.transcription.is_some());
-        assert!(ch.transcription_manager.is_some());
-    }
-
-    #[test]
-    fn with_transcription_skips_when_disabled() {
-        let tc = zeroclaw_config::schema::TranscriptionConfig::default(); // enabled = false
-        let ch =
-            TelegramChannel::new("token".into(), vec!["*".into()], false).with_transcription(tc);
-        assert!(ch.transcription.is_none());
-        assert!(ch.transcription_manager.is_none());
-    }
-
-    #[tokio::test]
-    async fn try_parse_voice_message_returns_none_when_transcription_disabled() {
-        let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
-        let update = serde_json::json!({
-            "message": {
-                "message_id": 1,
-                "voice": { "file_id": "voice_file", "duration": 4 },
-                "from": { "id": 123, "username": "alice" },
-                "chat": { "id": 456, "type": "private" }
-            }
-        });
-
-        let parsed = ch.try_parse_voice_message(&update).await;
-        assert!(parsed.is_none());
-    }
-
-    #[tokio::test]
-    async fn try_parse_voice_message_skips_when_duration_exceeds_limit() {
-        let tc = zeroclaw_config::schema::TranscriptionConfig {
-            enabled: true,
-            api_key: Some("test_key".to_string()),
-            max_duration_secs: 5,
-            ..Default::default()
-        };
-
-        let ch =
-            TelegramChannel::new("token".into(), vec!["*".into()], false).with_transcription(tc);
-        let update = serde_json::json!({
-            "message": {
-                "message_id": 2,
-                "voice": { "file_id": "voice_file", "duration": 30 },
-                "from": { "id": 123, "username": "alice" },
-                "chat": { "id": 456, "type": "private" }
-            }
-        });
-
-        let parsed = ch.try_parse_voice_message(&update).await;
-        assert!(parsed.is_none());
-    }
-
-    #[tokio::test]
-    async fn try_parse_voice_message_rejects_unauthorized_sender_before_download() {
-        let tc = zeroclaw_config::schema::TranscriptionConfig {
-            enabled: true,
-            api_key: Some("test_key".to_string()),
-            max_duration_secs: 120,
-            ..Default::default()
-        };
-
-        let ch = TelegramChannel::new("token".into(), vec!["alice".into()], false)
-            .with_transcription(tc);
-        let update = serde_json::json!({
-            "message": {
-                "message_id": 3,
-                "voice": { "file_id": "voice_file", "duration": 4 },
-                "from": { "id": 999, "username": "bob" },
-                "chat": { "id": 456, "type": "private" }
-            }
-        });
-
-        let parsed = ch.try_parse_voice_message(&update).await;
-        assert!(parsed.is_none());
-        assert!(ch.voice_transcriptions.lock().is_empty());
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Live e2e: voice transcription via Groq Whisper + reply cache lookup
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// Live test: voice transcription via Groq Whisper + reply cache lookup.
-    ///
-    /// Loads a pre-recorded MP3 fixture ("hello"), sends it to Groq Whisper
-    /// API, verifies the transcription contains "hello", then caches it and
-    /// checks that `extract_reply_context` returns the cached text instead
-    /// of the `[Voice message]` fallback placeholder.
-    ///
-    /// Skipped automatically when `GROQ_API_KEY` is not set.
-    /// Run: `GROQ_API_KEY=<key> cargo test --lib -- telegram::tests::e2e_live_voice_transcription_and_reply_cache --ignored`
-    #[tokio::test]
-    #[ignore = "requires GROQ_API_KEY environment variable"]
-    async fn e2e_live_voice_transcription_and_reply_cache() {
-        if std::env::var("GROQ_API_KEY").is_err() {
-            eprintln!("GROQ_API_KEY not set — skipping live voice transcription test");
-            return;
-        }
-
-        // 1. Load pre-recorded fixture (TTS-generated "hello", ~7 KB MP3)
-        let fixture_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello.mp3");
-        let audio_data = std::fs::read(&fixture_path)
-            .unwrap_or_else(|e| panic!("Failed to read fixture {}: {e}", fixture_path.display()));
-        assert!(
-            audio_data.len() > 1000,
-            "fixture too small ({} bytes), likely corrupt",
-            audio_data.len()
-        );
-
-        // 2. Call TranscriptionManager.transcribe() — real Groq Whisper API
-        let config = zeroclaw_config::schema::TranscriptionConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        let manager = crate::transcription::TranscriptionManager::new(&config)
-            .expect("TranscriptionManager::new should succeed with valid GROQ_API_KEY");
-        let transcript: String = manager
-            .transcribe(&audio_data, "hello.mp3")
-            .await
-            .expect("transcribe should succeed with valid GROQ_API_KEY");
-
-        // 3. Verify Whisper actually recognized "hello"
-        assert!(
-            transcript.to_lowercase().contains("hello"),
-            "expected transcription to contain 'hello', got: '{transcript}'"
-        );
-
-        // 4. Create TelegramChannel, insert transcription into voice_transcriptions cache
-        let ch = TelegramChannel::new("test_token".into(), vec!["*".into()], false);
-        let chat_id: i64 = 12345;
-        let message_id: i64 = 67;
-        let cache_key = format!("{chat_id}:{message_id}");
-        ch.voice_transcriptions
-            .lock()
-            .insert(cache_key, transcript.clone());
-
-        // 5. Build reply message with voice + message_id + chat.id
-        let msg = serde_json::json!({
-            "chat": { "id": chat_id },
-            "reply_to_message": {
-                "message_id": message_id,
-                "from": { "username": "zeroclaw_user" },
-                "voice": { "file_id": "test_file", "duration": 1 }
-            }
-        });
-
-        // 6. Verify extract_reply_context returns cached transcription
-        let ctx = ch
-            .extract_reply_context(&msg)
-            .expect("extract_reply_context should return Some for voice reply");
-
-        assert!(
-            ctx.contains(&format!("[Voice] {transcript}")),
-            "expected cached transcription in reply context, got: {ctx}"
-        );
-
-        // Must NOT contain the fallback placeholder
-        assert!(
-            !ctx.contains("[Voice message]"),
-            "context should use cached transcription, not fallback placeholder, got: {ctx}"
         );
     }
 
