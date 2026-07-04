@@ -205,8 +205,8 @@ use config::Config;
 
 // Re-export so binary modules can use crate::<CommandEnum> while keeping a single source of truth.
 pub use zeroclaw::{
-    ChannelCommands, CronCommands, GatewayCommands, HardwareCommands, IntegrationCommands,
-    MigrateCommands, PeripheralCommands, ServiceCommands, SkillCommands, SopCommands,
+    ChannelCommands, CronCommands, GatewayCommands, IntegrationCommands, MigrateCommands,
+    ServiceCommands, SkillCommands, SopCommands,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -302,8 +302,6 @@ enum Commands {
         #[arg(long, hide = true)]
         memory_only: bool,
         #[arg(long, hide = true)]
-        hardware_only: bool,
-        #[arg(long, hide = true)]
         tunnel_only: bool,
         #[arg(long, hide = true)]
         workspace_only: bool,
@@ -319,8 +317,7 @@ Use --message for single-shot queries without entering interactive mode.
 Examples:
   zeroclaw agent                              # interactive session
   zeroclaw agent -m \"Summarize today's logs\"  # single message
-  zeroclaw agent -p anthropic --model claude-sonnet-4-20250514
-  zeroclaw agent --peripheral nucleo-f401re:/dev/ttyACM0")]
+  zeroclaw agent -p anthropic --model claude-sonnet-4-20250514")]
     Agent {
         /// Single message mode (don't enter interactive mode)
         #[arg(short, long)]
@@ -341,10 +338,6 @@ Examples:
         /// Temperature (0.0 - 2.0, defaults to config default_temperature)
         #[arg(short, long, value_parser = parse_temperature)]
         temperature: Option<f64>,
-
-        /// Attach a peripheral (board:path, e.g. nucleo-f401re:/dev/ttyACM0)
-        #[arg(long)]
-        peripheral: Vec<String>,
     },
 
     /// Start/manage the gateway server (webhooks, websockets)
@@ -361,29 +354,6 @@ Examples:
     Gateway {
         #[command(subcommand)]
         gateway_command: Option<zeroclaw::GatewayCommands>,
-    },
-
-    /// Start ACP (Agent Control Protocol) server over stdio
-    #[command(long_about = "\
-Start the ACP server (JSON-RPC 2.0 over stdio).
-
-Launches a JSON-RPC 2.0 server on stdin/stdout for IDE and tool \
-integration. Supports session management and streaming agent \
-responses as notifications.
-
-Methods: initialize, session/new, session/prompt, session/stop.
-
-Examples:
-  zeroclaw acp                        # start ACP server
-  zeroclaw acp --max-sessions 5       # limit concurrent sessions")]
-    Acp {
-        /// Maximum concurrent sessions (default: 10)
-        #[arg(long)]
-        max_sessions: Option<usize>,
-
-        /// Session inactivity timeout in seconds (default: 3600)
-        #[arg(long)]
-        session_timeout: Option<u64>,
     },
 
     /// Start long-running autonomous runtime (gateway + channels + heartbeat + scheduler)
@@ -546,42 +516,6 @@ Examples:
     Auth {
         #[command(subcommand)]
         auth_command: AuthCommands,
-    },
-
-    /// Discover and introspect USB hardware
-    #[command(long_about = "\
-Discover and introspect USB hardware.
-
-Enumerate connected USB devices, identify known development boards \
-(STM32 Nucleo, Arduino, ESP32), and retrieve chip information via \
-probe-rs / ST-Link.
-
-Examples:
-  zeroclaw hardware discover
-  zeroclaw hardware introspect /dev/ttyACM0
-  zeroclaw hardware info --chip STM32F401RETx")]
-    Hardware {
-        #[command(subcommand)]
-        hardware_command: zeroclaw::HardwareCommands,
-    },
-
-    /// Manage hardware peripherals (STM32, RPi GPIO, etc.)
-    #[command(long_about = "\
-Manage hardware peripherals.
-
-Add, list, flash, and configure hardware boards that expose tools \
-to the agent (GPIO, sensors, actuators). Supported boards: \
-nucleo-f401re, rpi-gpio, esp32, arduino-uno.
-
-Examples:
-  zeroclaw peripheral list
-  zeroclaw peripheral add nucleo-f401re /dev/ttyACM0
-  zeroclaw peripheral add rpi-gpio native
-  zeroclaw peripheral flash --port /dev/cu.usbmodem12345
-  zeroclaw peripheral flash-nucleo")]
-    Peripheral {
-        #[command(subcommand)]
-        peripheral_command: zeroclaw::PeripheralCommands,
     },
 
     /// Manage agent memory (list, get, stats, clear)
@@ -785,7 +719,6 @@ fn resolve_onboard_target(
     channels_only: bool,
     providers_only: bool,
     memory_only: bool,
-    hardware_only: bool,
     tunnel_only: bool,
     workspace_only: bool,
 ) -> (
@@ -808,12 +741,6 @@ fn resolve_onboard_target(
             "providers",
         ),
         (memory_only, Section::Memory, "--memory-only", "memory"),
-        (
-            hardware_only,
-            Section::Hardware,
-            "--hardware-only",
-            "hardware",
-        ),
         (tunnel_only, Section::Tunnel, "--tunnel-only", "tunnel"),
         (
             workspace_only,
@@ -1241,17 +1168,12 @@ async fn main() -> Result<()> {
     }
 
     // Initialize logging - respects RUST_LOG env var, defaults to INFO.
-    // For the ACP command, we default to WARN to avoid INFO logs corrupting the stdio protocol.
-    // We also always redirect logs to stderr so stdout remains clean for data.
-    let default_log_level = if matches!(cli.command, Commands::Acp { .. }) {
-        "warn"
-    } else {
-        // matrix_sdk crates are suppressed to warn because they are extremely
-        // noisy at info level. To restore SDK-level output for Matrix debugging:
-        //   RUST_LOG=info,matrix_sdk=info,matrix_sdk_base=info,matrix_sdk_crypto=info
-        // acp_server has to be WARN because INFO injects junk data into the JSON stream.
-        "info,matrix_sdk=warn,matrix_sdk_base=warn,matrix_sdk_crypto=warn"
-    };
+    // We always redirect logs to stderr so stdout remains clean for data.
+    // matrix_sdk crates are suppressed to warn because they are extremely
+    // noisy at info level. To restore SDK-level output for Matrix debugging:
+    //   RUST_LOG=info,matrix_sdk=info,matrix_sdk_base=info,matrix_sdk_crypto=info
+    let default_log_level =
+        "info,matrix_sdk=warn,matrix_sdk_base=warn,matrix_sdk_crypto=warn";
 
     let subscriber = fmt::Subscriber::builder()
         .with_writer(std::io::stderr)
@@ -1284,7 +1206,6 @@ async fn main() -> Result<()> {
         channels_only,
         providers_only,
         memory_only,
-        hardware_only,
         tunnel_only,
         workspace_only,
     } = &cli.command
@@ -1297,7 +1218,6 @@ async fn main() -> Result<()> {
             *channels_only,
             *providers_only,
             *memory_only,
-            *hardware_only,
             *tunnel_only,
             *workspace_only,
         );
@@ -1525,7 +1445,6 @@ async fn main() -> Result<()> {
             provider,
             model,
             temperature,
-            peripheral,
         } => {
             let final_temperature = temperature.unwrap_or_else(|| {
                 config
@@ -1546,29 +1465,13 @@ async fn main() -> Result<()> {
                 provider,
                 model,
                 final_temperature,
-                peripheral,
+                Vec::new(),
                 true,
                 session_state_file,
                 None,
             ))
             .await
             .map(|_| ())
-        }
-
-        Commands::Acp {
-            max_sessions,
-            session_timeout,
-        } => {
-            let mut acp_config = channels::acp_server::AcpServerConfig::default();
-            if let Some(max) = max_sessions {
-                acp_config.max_sessions = max;
-            }
-            if let Some(timeout) = session_timeout {
-                acp_config.session_timeout_secs = timeout;
-            }
-            let server =
-                std::sync::Arc::new(channels::acp_server::AcpServer::new(config, acp_config));
-            server.run().await
         }
 
         Commands::Gateway { gateway_command } => {
@@ -1738,25 +1641,11 @@ async fn main() -> Result<()> {
                 Box::new(zeroclaw_channels::cli::CliChannel::new())
             }));
 
-            // Wire peripheral tools from zeroclaw-hardware
-            #[cfg(feature = "hardware")]
-            zeroclaw_runtime::agent::loop_::register_peripheral_tools_fn(Box::new(|config| {
-                Box::pin(async move {
-                    zeroclaw_hardware::peripherals::create_peripheral_tools(&config).await
-                })
-            }));
-
             // Cron delivery is registered earlier (before the command match)
             // so it works for both `daemon` and `gateway start`.
 
-            // Single canvas store shared between the gateway HTTP / WebSocket
-            // surface and the channel-server agents so canvas frames pushed
-            // from Telegram / Discord / Slack reach the same subscribers the
-            // web UI serves. Without this, channels build an orphaned
-            // CanvasStore::default() and frames are silently dropped (#5356).
-            let canvas_store = zeroclaw_runtime::tools::CanvasStore::new();
-            let canvas_store_for_gateway = canvas_store.clone();
-            let canvas_store_for_channels = canvas_store.clone();
+            // Phase 1.5 strip: CanvasStore is a zero-state stub; pass None so
+            // the gateway and channels fall back to their own defaults.
 
             // Reload loop. `daemon::run` returns DaemonExit::Shutdown on
             // SIGINT/SIGTERM (loop ends) or DaemonExit::Reload on SIGUSR1
@@ -1765,23 +1654,12 @@ async fn main() -> Result<()> {
             // tear down + re-instantiate.
             let mut current_config = config;
             loop {
-                // Per-iteration clones so the subsystem closures (which
-                // `move`-capture) don't consume the outer bindings on the
-                // first iteration; reload would otherwise see a moved value.
-                let canvas_store_for_gateway = canvas_store_for_gateway.clone();
-                let canvas_store_for_channels = canvas_store_for_channels.clone();
                 let subsystems = daemon::DaemonSubsystems {
                     #[cfg(feature = "gateway")]
                     gateway_start: Some(Box::new(move |host, port, config, tx, reload_tx| {
-                        let canvas_store = canvas_store_for_gateway.clone();
                         Box::pin(async move {
                             Box::pin(zeroclaw_gateway::run_gateway(
-                                &host,
-                                port,
-                                config,
-                                tx,
-                                reload_tx,
-                                Some(canvas_store),
+                                &host, port, config, tx, reload_tx, None,
                             ))
                             .await
                         })
@@ -1789,13 +1667,9 @@ async fn main() -> Result<()> {
                     #[cfg(not(feature = "gateway"))]
                     gateway_start: None,
                     channels_start: Some(Box::new(move |config| {
-                        let canvas_store = canvas_store_for_channels.clone();
                         Box::pin(async move {
-                            Box::pin(zeroclaw_channels::orchestrator::start_channels(
-                                config,
-                                Some(canvas_store),
-                            ))
-                            .await
+                            Box::pin(zeroclaw_channels::orchestrator::start_channels(config, None))
+                                .await
                         })
                     })),
                     mqtt_start: Some(Box::new(|mqtt_config| {
@@ -2094,18 +1968,6 @@ async fn main() -> Result<()> {
         }
 
         Commands::Auth { auth_command } => handle_auth_command(auth_command, &config).await,
-
-        Commands::Hardware { hardware_command } => {
-            hardware::handle_command(hardware_command.clone(), &config)
-        }
-
-        Commands::Peripheral { peripheral_command } => {
-            Box::pin(peripherals::handle_command(
-                peripheral_command.clone(),
-                &config,
-            ))
-            .await
-        }
 
         Commands::Desktop {
             install: do_install,
@@ -4051,7 +3913,7 @@ mod tests {
     fn resolve_onboard_target_no_explicit_no_legacy_runs_all() {
         use zeroclaw_runtime::onboard::Section;
         let (target, deprecation) =
-            resolve_onboard_target(None, false, false, false, false, false, false);
+            resolve_onboard_target(None, false, false, false, false, false);
         assert_eq!(target, Section::All);
         assert!(deprecation.is_none());
     }
@@ -4062,7 +3924,6 @@ mod tests {
         use zeroclaw_runtime::onboard::Section;
         let (target, deprecation) = resolve_onboard_target(
             Some(OnboardSection::Channels),
-            false,
             false,
             false,
             false,
@@ -4079,47 +3940,39 @@ mod tests {
         use zeroclaw_runtime::onboard::Section;
         for (mut flags, expected_section, expected_old, expected_new) in [
             (
-                [true, false, false, false, false, false],
+                [true, false, false, false, false],
                 Section::Channels,
                 "--channels-only",
                 "channels",
             ),
             (
-                [false, true, false, false, false, false],
+                [false, true, false, false, false],
                 Section::Providers,
                 "--providers-only",
                 "providers",
             ),
             (
-                [false, false, true, false, false, false],
+                [false, false, true, false, false],
                 Section::Memory,
                 "--memory-only",
                 "memory",
             ),
             (
-                [false, false, false, true, false, false],
-                Section::Hardware,
-                "--hardware-only",
-                "hardware",
-            ),
-            (
-                [false, false, false, false, true, false],
+                [false, false, false, true, false],
                 Section::Tunnel,
                 "--tunnel-only",
                 "tunnel",
             ),
             (
-                [false, false, false, false, false, true],
+                [false, false, false, false, true],
                 Section::Workspace,
                 "--workspace-only",
                 "workspace",
             ),
         ] {
-            let [channels, providers, memory, hardware, tunnel, workspace] =
-                std::mem::take(&mut flags);
-            let (target, deprecation) = resolve_onboard_target(
-                None, channels, providers, memory, hardware, tunnel, workspace,
-            );
+            let [channels, providers, memory, tunnel, workspace] = std::mem::take(&mut flags);
+            let (target, deprecation) =
+                resolve_onboard_target(None, channels, providers, memory, tunnel, workspace);
             assert_eq!(target, expected_section, "{expected_old} target");
             assert_eq!(
                 deprecation,
@@ -4139,7 +3992,6 @@ mod tests {
         let (target, deprecation) = resolve_onboard_target(
             Some(OnboardSection::Providers),
             true, // --channels-only
-            false,
             false,
             false,
             false,
