@@ -930,7 +930,6 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         "fireworks" | "fireworks-ai" => vec!["FIREWORKS_API_KEY"],
         "novita" => vec!["NOVITA_API_KEY"],
         "perplexity" => vec!["PERPLEXITY_API_KEY"],
-        "copilot" | "github-copilot" => vec!["GITHUB_TOKEN"],
         "cohere" => vec!["COHERE_API_KEY"],
         name if is_moonshot_alias(name) => vec!["MOONSHOT_API_KEY"],
         "kimi-code" | "kimi_coding" | "kimi_for_coding" => {
@@ -938,18 +937,6 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         }
         name if is_glm_alias(name) => vec!["GLM_API_KEY"],
         name if is_minimax_alias(name) => vec![MINIMAX_OAUTH_TOKEN_ENV, MINIMAX_API_KEY_ENV],
-        // Bedrock supports Bearer token auth via BEDROCK_API_KEY env var, in addition
-        // to AWS AKSK (SigV4). If BEDROCK_API_KEY is set, return it; otherwise return
-        // None and let BedrockProvider handle SigV4 credential resolution internally.
-        "bedrock" | "aws-bedrock" => {
-            if let Ok(val) = std::env::var("BEDROCK_API_KEY") {
-                let trimmed = val.trim().to_string();
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
-            }
-            return None;
-        }
         name if is_qianfan_alias(name) => vec!["QIANFAN_API_KEY"],
         name if is_doubao_alias(name) => {
             vec!["ARK_API_KEY", "VOLCENGINE_API_KEY", "DOUBAO_API_KEY"]
@@ -973,8 +960,6 @@ fn resolve_provider_credential(name: &str, credential_override: Option<&str>) ->
         "aihubmix" => vec!["AIHUBMIX_API_KEY"],
         "siliconflow" | "silicon-flow" => vec!["SILICONFLOW_API_KEY"],
         "osaurus" => vec!["OSAURUS_API_KEY"],
-        "telnyx" => vec!["TELNYX_API_KEY"],
-        "azure_openai" | "azure-openai" | "azure" => vec!["AZURE_OPENAI_API_KEY"],
         _ => vec![],
     };
 
@@ -1030,8 +1015,6 @@ fn check_api_key_prefix(provider_name: &str, key: &str) -> Option<&'static str> 
         Some("xai")
     } else if key.starts_with("nvapi-") {
         Some("nvidia")
-    } else if key.starts_with("KEY-") {
-        Some("telnyx")
     } else {
         None
     };
@@ -1047,7 +1030,6 @@ fn check_api_key_prefix(provider_name: &str, key: &str) -> Option<&'static str> 
         "perplexity" => expected == "perplexity",
         "xai" | "grok" => expected == "xai",
         "nvidia" | "nvidia-nim" | "build.nvidia.com" => expected == "nvidia",
-        "telnyx" => expected == "telnyx",
         _ => return None, // Unknown format provider — skip
     };
 
@@ -1117,12 +1099,7 @@ pub fn create_provider_with_options(
     api_key: Option<&str>,
     options: &ProviderRuntimeOptions,
 ) -> anyhow::Result<Box<dyn Provider>> {
-    match name {
-        "openai-codex" | "openai_codex" | "codex" => Ok(Box::new(
-            openai_codex::OpenAiCodexProvider::new(options, api_key)?,
-        )),
-        _ => create_provider_with_url_and_options(name, api_key, None, options),
-    }
+    create_provider_with_url_and_options(name, api_key, None, options)
 }
 
 /// Factory: create the right provider from config with optional custom base URL
@@ -1203,18 +1180,6 @@ fn create_provider_with_url_and_options(
     }
 
     match name {
-        "openai-codex" | "openai_codex" | "codex" => {
-            let mut codex_options = options.clone();
-            codex_options.provider_api_url = api_url
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .or_else(|| options.provider_api_url.clone());
-            Ok(Box::new(openai_codex::OpenAiCodexProvider::new(
-                &codex_options,
-                key,
-            )?))
-        }
         // ── Primary providers (custom implementations) ───────
         "openrouter" => {
             let mut p = openrouter::OpenRouterProvider::new(key, options.provider_timeout_secs)
@@ -1264,7 +1229,6 @@ fn create_provider_with_url_and_options(
                 options.auth_profile_override.clone(),
             )))
         }
-        "telnyx" => Ok(Box::new(telnyx::TelnyxProvider::new(key))),
 
         // ── OpenAI-compatible providers ──────────────────────
         "venice" => Ok(compat(
@@ -1344,30 +1308,6 @@ fn create_provider_with_url_and_options(
             )
             .with_merge_system_into_user(),
         )),
-        "azure_openai" | "azure-openai" | "azure" => {
-            let resource = std::env::var("AZURE_OPENAI_RESOURCE")
-                .unwrap_or_else(|_| "my-resource".to_string());
-            let deployment =
-                std::env::var("AZURE_OPENAI_DEPLOYMENT").unwrap_or_else(|_| "gpt-4o".to_string());
-            let api_version = std::env::var("AZURE_OPENAI_API_VERSION").ok();
-            Ok(Box::new(azure_openai::AzureOpenAiProvider::new(
-                key,
-                &resource,
-                &deployment,
-                api_version.as_deref(),
-            )))
-        }
-        "bedrock" | "aws-bedrock" => {
-            let mut p = if let Some(api_key) = key {
-                bedrock::BedrockProvider::with_bearer_token(api_key)
-            } else {
-                bedrock::BedrockProvider::new()
-            };
-            if let Some(mt) = options.provider_max_tokens {
-                p = p.with_max_tokens(mt);
-            }
-            Ok(Box::new(p))
-        }
         name if is_qwen_oauth_alias(name) => {
             let base_url = api_url
                 .map(str::trim)
@@ -1489,10 +1429,6 @@ fn create_provider_with_url_and_options(
             key,
             AuthStyle::Bearer,
         ))),
-        "copilot" | "github-copilot" => Ok(Box::new(copilot::CopilotProvider::new(key))),
-        "claude-code" => Ok(Box::new(claude_code::ClaudeCodeProvider::new())),
-        "gemini-cli" => Ok(Box::new(gemini_cli::GeminiCliProvider::new())),
-        "kilocli" | "kilo" => Ok(Box::new(kilocli::KiloCliProvider::new())),
         "lmstudio" | "lm-studio" => {
             let lm_studio_key = key
                 .map(str::trim)
@@ -1834,12 +1770,8 @@ pub fn create_resilient_provider_with_options(
 ) -> anyhow::Result<Box<dyn Provider>> {
     let mut providers: Vec<(String, Box<dyn Provider>)> = Vec::new();
 
-    let primary_provider = match primary_name {
-        "openai-codex" | "openai_codex" | "codex" => {
-            create_provider_with_options(primary_name, api_key, options)?
-        }
-        _ => create_provider_with_url_and_options(primary_name, api_key, api_url, options)?,
-    };
+    let primary_provider =
+        create_provider_with_url_and_options(primary_name, api_key, api_url, options)?;
     providers.push((primary_name.to_string(), primary_provider));
 
     for fallback in &reliability.fallback_providers {
@@ -1855,7 +1787,7 @@ pub fn create_resilient_provider_with_options(
         // `resolve_provider_credential` check the correct env var for the
         // fallback provider name.
         //
-        // When a profile override is present (e.g. "openai-codex:second"),
+        // When a profile override is present (e.g. "gemini:work"),
         // propagate it through `auth_profile_override` so the provider
         // picks up the correct OAuth credential set.
         let fallback_options = match profile_override {
@@ -2066,30 +1998,6 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             local: false,
         },
         ProviderInfo {
-            name: "openai-codex",
-            display_name: "OpenAI Codex (OAuth)",
-            description: "ChatGPT-Plus OAuth via Codex CLI",
-            aliases: &["openai_codex", "codex"],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
-            name: "telnyx",
-            display_name: "Telnyx",
-            description: "Telnyx Inference",
-            aliases: &[],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
-            name: "azure_openai",
-            display_name: "Azure OpenAI",
-            description: "Azure-hosted OpenAI models",
-            aliases: &["azure-openai", "azure"],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
             name: "ollama",
             display_name: "Ollama",
             description: "Local models (Llama, Qwen, etc.)",
@@ -2205,14 +2113,6 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             local: false,
         },
         ProviderInfo {
-            name: "bedrock",
-            display_name: "Amazon Bedrock",
-            description: "AWS managed model access",
-            aliases: &["aws-bedrock"],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
             name: "qianfan",
             display_name: "Qianfan (Baidu)",
             description: "Baidu AI models",
@@ -2324,38 +2224,6 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             aliases: &[],
             activation: ProviderActivation::FallbackKey,
             local: false,
-        },
-        ProviderInfo {
-            name: "copilot",
-            display_name: "GitHub Copilot",
-            description: "GitHub Copilot",
-            aliases: &["github-copilot"],
-            activation: ProviderActivation::FallbackKey,
-            local: false,
-        },
-        ProviderInfo {
-            name: "claude-code",
-            display_name: "Claude Code (CLI)",
-            description: "Claude Code CLI (local)",
-            aliases: &[],
-            activation: ProviderActivation::FallbackKey,
-            local: true,
-        },
-        ProviderInfo {
-            name: "gemini-cli",
-            display_name: "Gemini CLI",
-            description: "Gemini CLI (local)",
-            aliases: &[],
-            activation: ProviderActivation::FallbackKey,
-            local: true,
-        },
-        ProviderInfo {
-            name: "kilocli",
-            display_name: "KiloCLI",
-            description: "KiloCLI (local)",
-            aliases: &["kilo"],
-            activation: ProviderActivation::FallbackKey,
-            local: true,
         },
         ProviderInfo {
             name: "lmstudio",
@@ -2694,34 +2562,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_provider_credential_bedrock_uses_internal_credential_path() {
-        let _generic_guard = EnvGuard::set("API_KEY", Some("generic-key"));
-        let _override_guard = EnvGuard::set("OPENROUTER_API_KEY", Some("openrouter-key"));
-        let _bedrock_guard = EnvGuard::set("BEDROCK_API_KEY", None);
-
-        assert_eq!(
-            resolve_provider_credential("bedrock", Some("explicit")),
-            Some("explicit".to_string())
-        );
-        assert!(resolve_provider_credential("bedrock", None).is_none());
-        assert!(resolve_provider_credential("aws-bedrock", None).is_none());
-    }
-
-    #[test]
-    fn resolve_provider_credential_bedrock_returns_bearer_token_from_env() {
-        let _bedrock_guard = EnvGuard::set("BEDROCK_API_KEY", Some("bedrock-bearer-token"));
-
-        assert_eq!(
-            resolve_provider_credential("bedrock", None),
-            Some("bedrock-bearer-token".to_string())
-        );
-        assert_eq!(
-            resolve_provider_credential("aws-bedrock", None),
-            Some("bedrock-bearer-token".to_string())
-        );
-    }
-
-    #[test]
     fn resolve_qwen_oauth_context_prefers_explicit_override() {
         let _env_lock = env_lock();
         let fake_home = format!("/tmp/zeroclaw-qwen-oauth-home-{}", std::process::id());
@@ -2916,12 +2756,6 @@ mod tests {
     }
 
     #[test]
-    fn factory_openai_codex() {
-        let options = ProviderRuntimeOptions::default();
-        assert!(create_provider_with_options("openai-codex", None, &options).is_ok());
-    }
-
-    #[test]
     fn factory_ollama() {
         assert!(create_provider("ollama", None).is_ok());
         // Ollama may use API key when a remote endpoint is configured.
@@ -2936,12 +2770,6 @@ mod tests {
         assert!(create_provider("google-gemini", Some("test-key")).is_ok());
         // Should also work without key (will try CLI auth)
         assert!(create_provider("gemini", None).is_ok());
-    }
-
-    #[test]
-    fn factory_telnyx() {
-        assert!(create_provider("telnyx", Some("test-key")).is_ok());
-        assert!(create_provider("telnyx", None).is_ok());
     }
 
     // ── OpenAI-compatible providers ──────────────────────────
@@ -3061,15 +2889,6 @@ mod tests {
         let minimax_cn =
             create_provider("minimax-cn", Some("key")).expect("provider should resolve");
         assert!(minimax_cn.supports_native_tools());
-    }
-
-    #[test]
-    fn factory_bedrock() {
-        // Bedrock uses AWS env vars for credentials, not API key.
-        assert!(create_provider("bedrock", None).is_ok());
-        assert!(create_provider("aws-bedrock", None).is_ok());
-        // Passing an api_key is harmless (ignored).
-        assert!(create_provider("bedrock", Some("ignored")).is_ok());
     }
 
     #[test]
@@ -3211,17 +3030,6 @@ mod tests {
         assert!(create_provider("silicon-flow", Some("key")).is_ok());
     }
 
-    #[test]
-    fn factory_codex_oauth_aliases() {
-        let options = ProviderRuntimeOptions::default();
-        for alias in &["codex", "openai-codex", "openai_codex"] {
-            assert!(
-                create_provider_with_options(alias, None, &options).is_ok(),
-                "codex alias '{alias}' should produce a provider"
-            );
-        }
-    }
-
     // ── Extended ecosystem ───────────────────────────────────
 
     #[test]
@@ -3346,28 +3154,6 @@ mod tests {
     #[test]
     fn factory_cohere() {
         assert!(create_provider("cohere", Some("key")).is_ok());
-    }
-
-    #[test]
-    fn factory_copilot() {
-        assert!(create_provider("copilot", Some("key")).is_ok());
-        assert!(create_provider("github-copilot", Some("key")).is_ok());
-    }
-
-    #[test]
-    fn factory_claude_code() {
-        assert!(create_provider("claude-code", None).is_ok());
-    }
-
-    #[test]
-    fn factory_gemini_cli() {
-        assert!(create_provider("gemini-cli", None).is_ok());
-    }
-
-    #[test]
-    fn factory_kilocli() {
-        assert!(create_provider("kilocli", None).is_ok());
-        assert!(create_provider("kilo", None).is_ok());
     }
 
     #[test]
@@ -3698,7 +3484,6 @@ mod tests {
             "glm-cn",
             "minimax",
             "minimax-cn",
-            "bedrock",
             "qianfan",
             "doubao",
             "qwen",
@@ -3711,7 +3496,6 @@ mod tests {
             "sglang",
             "vllm",
             "osaurus",
-            "telnyx",
             "groq",
             "mistral",
             "xai",
@@ -3721,10 +3505,6 @@ mod tests {
             "novita",
             "perplexity",
             "cohere",
-            "copilot",
-            "claude-code",
-            "gemini-cli",
-            "kilocli",
             "nvidia",
             "astrai",
             "avian",
@@ -3914,8 +3694,8 @@ mod tests {
 
     #[test]
     fn parse_provider_profile_with_profile() {
-        let (name, profile) = parse_provider_profile("openai-codex:second");
-        assert_eq!(name, "openai-codex");
+        let (name, profile) = parse_provider_profile("openrouter:second");
+        assert_eq!(name, "openrouter");
         assert_eq!(profile, Some("second"));
     }
 
@@ -3929,7 +3709,7 @@ mod tests {
 
     #[test]
     fn parse_provider_profile_anthropic_custom_not_split() {
-        let input = "anthropic-custom:https://bedrock.example.com";
+        let input = "anthropic-custom:https://api.example.com";
         let (name, profile) = parse_provider_profile(input);
         assert_eq!(name, input);
         assert_eq!(profile, None);
@@ -3937,8 +3717,8 @@ mod tests {
 
     #[test]
     fn parse_provider_profile_empty_profile_ignored() {
-        let (name, profile) = parse_provider_profile("openai-codex:");
-        assert_eq!(name, "openai-codex:");
+        let (name, profile) = parse_provider_profile("openrouter:");
+        assert_eq!(name, "openrouter:");
         assert_eq!(profile, None);
     }
 
@@ -3958,7 +3738,7 @@ mod tests {
         let reliability = zeroclaw_config::schema::ReliabilityConfig {
             provider_retries: 1,
             provider_backoff_ms: 100,
-            fallback_providers: vec!["openai-codex:second".into()],
+            fallback_providers: vec!["ollama:second".into()],
             api_keys: Vec::new(),
             model_fallbacks: std::collections::HashMap::new(),
             channel_initial_backoff_secs: 2,
@@ -3967,10 +3747,8 @@ mod tests {
             scheduler_retries: 2,
         };
 
-        // openai-codex resolves its own OAuth credential; it should not
-        // fail even with a profile override that has no local token file.
-        // The provider initializes successfully and will attempt auth at
-        // request time.
+        // Ollama requires no API key, so it should initialize successfully
+        // even with a profile override that it ignores.
         let provider = create_resilient_provider("lmstudio", None, None, &reliability);
         assert!(provider.is_ok());
     }
@@ -3983,7 +3761,7 @@ mod tests {
             provider_retries: 1,
             provider_backoff_ms: 100,
             fallback_providers: vec![
-                "openai-codex:second".into(),
+                "ollama:second".into(),
                 "custom:http://localhost:8080/v1".into(),
                 "lmstudio".into(),
                 "nonexistent-provider".into(),
