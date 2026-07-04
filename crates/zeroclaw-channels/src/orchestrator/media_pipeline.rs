@@ -3,8 +3,7 @@
 //! Pre-processes media attachments (audio, images, video) before the agent sees
 //! the message, enriching the text with human-readable annotations:
 //!
-//! - **Audio**: transcribed via the existing [`super::transcription`] infrastructure,
-//!   prepended as `[Audio transcription: ...]`.
+//! - **Audio**: summarised as `[Audio: attached]` (transcription module removed in Phase 1.5).
 //! - **Images**: when a vision-capable provider is active, described as `[Image: <description>]`.
 //!   Falls back to `[Image: attached]` when vision is unavailable.
 //! - **Video**: summarised as `[Video summary: ...]` when an API is available,
@@ -12,7 +11,7 @@
 //!
 //! The pipeline is **opt-in** via `[media_pipeline] enabled = true` in config.
 
-use zeroclaw_config::schema::{MediaPipelineConfig, TranscriptionConfig};
+use zeroclaw_config::schema::MediaPipelineConfig;
 
 // Re-export media types from zeroclaw-types for backwards compatibility.
 pub use zeroclaw_api::media::{MediaAttachment, MediaKind};
@@ -23,21 +22,15 @@ pub use zeroclaw_api::media::{MediaAttachment, MediaKind};
 /// media annotations prepended.
 pub struct MediaPipeline<'a> {
     config: &'a MediaPipelineConfig,
-    transcription_config: &'a TranscriptionConfig,
     vision_available: bool,
 }
 
 impl<'a> MediaPipeline<'a> {
     /// Create a new pipeline. `vision_available` indicates whether the current
     /// provider supports vision (image description).
-    pub fn new(
-        config: &'a MediaPipelineConfig,
-        transcription_config: &'a TranscriptionConfig,
-        vision_available: bool,
-    ) -> Self {
+    pub fn new(config: &'a MediaPipelineConfig, vision_available: bool) -> Self {
         Self {
             config,
-            transcription_config,
             vision_available,
         }
     }
@@ -91,36 +84,9 @@ impl<'a> MediaPipeline<'a> {
         enriched.trim().to_string()
     }
 
-    /// Transcribe an audio attachment using the existing transcription infra.
-    async fn process_audio(&self, attachment: &MediaAttachment) -> String {
-        if !self.transcription_config.enabled {
-            return "[Audio: attached]".to_string();
-        }
-
-        match super::transcription::transcribe_audio(
-            attachment.data.clone(),
-            &attachment.file_name,
-            self.transcription_config,
-        )
-        .await
-        {
-            Ok(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    "[Audio transcription: (empty)]".to_string()
-                } else {
-                    format!("[Audio transcription: {trimmed}]")
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    file = %attachment.file_name,
-                    error = %err,
-                    "Media pipeline: audio transcription failed"
-                );
-                "[Audio: transcription failed]".to_string()
-            }
-        }
+    /// Audio transcription was removed in Phase 1.5; note the attachment only.
+    async fn process_audio(&self, _attachment: &MediaAttachment) -> String {
+        "[Audio: attached]".to_string()
     }
 
     /// Describe an image attachment.
@@ -244,8 +210,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_pipeline_returns_original_text() {
         let config = default_pipeline_config(false);
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let result = pipeline.process("hello", &[sample_audio()]).await;
         assert_eq!(result, "hello");
@@ -254,8 +219,7 @@ mod tests {
     #[tokio::test]
     async fn empty_attachments_returns_original_text() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let result = pipeline.process("hello", &[]).await;
         assert_eq!(result, "hello");
@@ -264,8 +228,7 @@ mod tests {
     #[tokio::test]
     async fn image_annotation_with_vision() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, true);
+        let pipeline = MediaPipeline::new(&config, true);
 
         let result = pipeline.process("check this", &[sample_image()]).await;
         assert!(
@@ -278,8 +241,7 @@ mod tests {
     #[tokio::test]
     async fn image_annotation_without_vision() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let result = pipeline.process("check this", &[sample_image()]).await;
         assert!(
@@ -291,8 +253,7 @@ mod tests {
     #[tokio::test]
     async fn video_annotation() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let result = pipeline.process("watch", &[sample_video()]).await;
         assert!(
@@ -304,11 +265,7 @@ mod tests {
     #[tokio::test]
     async fn audio_without_transcription_enabled() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let result = pipeline.process("", &[sample_audio()]).await;
         assert_eq!(result, "[Audio: attached]");
@@ -317,11 +274,7 @@ mod tests {
     #[tokio::test]
     async fn multiple_attachments_produce_multiple_annotations() {
         let config = default_pipeline_config(true);
-        let tc = TranscriptionConfig {
-            enabled: false,
-            ..Default::default()
-        };
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let attachments = vec![sample_audio(), sample_image(), sample_video()];
         let result = pipeline.process("context", &attachments).await;
@@ -349,8 +302,7 @@ mod tests {
             describe_images: false,
             summarize_video: false,
         };
-        let tc = TranscriptionConfig::default();
-        let pipeline = MediaPipeline::new(&config, &tc, false);
+        let pipeline = MediaPipeline::new(&config, false);
 
         let attachments = vec![sample_audio(), sample_image(), sample_video()];
         let result = pipeline.process("hello", &attachments).await;
