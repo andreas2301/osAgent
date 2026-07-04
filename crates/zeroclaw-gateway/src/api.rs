@@ -1148,44 +1148,15 @@ pub async fn handle_api_session_abort(
     }
 }
 
-// ── Claude Code hook endpoint ────────────────────────────────────
-
-/// POST /hooks/claude-code — receives HTTP hook events from Claude Code
-/// sessions spawned by `ClaudeCodeRunnerTool`.
-///
-/// Claude Code posts structured JSON describing tool executions, completions,
-/// and errors. This handler logs the event and (when a Slack channel is
-/// configured) could be wired to update a Slack message in-place.
-pub async fn handle_claude_code_hook(
-    State(state): State<AppState>,
-    Json(payload): Json<zeroclaw_tools::claude_code_runner::ClaudeCodeHookEvent>,
-) -> impl IntoResponse {
-    // Do not require bearer-token auth: Claude Code subprocesses cannot easily
-    // obtain a pairing token, and the hook carries a session_id that ties it
-    // back to a session we spawned.
-    let _ = &state; // retained for future Slack update wiring
-
-    tracing::info!(
-        session_id = %payload.session_id,
-        event_type = %payload.event_type,
-        tool_name = ?payload.tool_name,
-        summary = ?payload.summary,
-        "Claude Code hook event received"
-    );
-
-    Json(serde_json::json!({ "ok": true }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppState, GatewayRateLimiter, IdempotencyStore, nodes};
+    use crate::AppState;
     use async_trait::async_trait;
     use axum::response::IntoResponse;
     use http_body_util::BodyExt;
     use parking_lot::Mutex;
     use std::sync::Arc;
-    use std::time::Duration;
     use zeroclaw_memory::{Memory, MemoryCategory, MemoryEntry};
     use zeroclaw_providers::Provider;
     use zeroclaw_runtime::security::pairing::PairingGuard;
@@ -1267,38 +1238,20 @@ mod tests {
             temperature: 0.0,
             mem: Arc::new(MockMemory),
             auto_save: false,
-            webhook_secret_hash: None,
             pairing: Arc::new(PairingGuard::new(false, &[])),
             trust_forwarded_headers: false,
-            rate_limiter: Arc::new(GatewayRateLimiter::new(100, 100, 100)),
-            auth_limiter: Arc::new(crate::auth_rate_limit::AuthRateLimiter::new()),
-            idempotency_store: Arc::new(IdempotencyStore::new(Duration::from_secs(300), 1000)),
-            whatsapp: None,
-            whatsapp_app_secret: None,
-            linq: None,
-            linq_signing_secret: None,
-            nextcloud_talk: None,
-            nextcloud_talk_webhook_secret: None,
-            wati: None,
-            gmail_push: None,
+            rate_limiter: Arc::new(crate::GatewayRateLimiter::new(100, 100)),
             observer: Arc::new(zeroclaw_runtime::observability::NoopObserver),
             tools_registry: Arc::new(Vec::new()),
             cost_tracker: None,
             event_tx: tokio::sync::broadcast::channel(16).0,
-            event_buffer: Arc::new(crate::sse::EventBuffer::new(16)),
             shutdown_tx: tokio::sync::watch::channel(false).0,
-            node_registry: Arc::new(nodes::NodeRegistry::new(16)),
+            node_registry: Arc::new(crate::nodes::NodeRegistry::new(16)),
+            path_prefix: String::new(),
             session_backend: None,
             session_queue: Arc::new(crate::session_queue::SessionActorQueue::new(8, 30, 600)),
-            device_registry: None,
-            pending_pairings: None,
-            path_prefix: String::new(),
-            web_dist_dir: None,
-            canvas_store: zeroclaw_runtime::tools::CanvasStore::new(),
             cancel_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             reload_tx: None,
-            #[cfg(feature = "webauthn")]
-            webauthn: None,
         }
     }
 

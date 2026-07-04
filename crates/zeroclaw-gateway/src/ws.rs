@@ -56,7 +56,7 @@
 //! - `token` — bearer auth token (alternative to Authorization header)
 
 use super::AppState;
-use crate::ws_approval::{PendingApprovals, WsApprovalChannel, new_pending_approvals};
+use async_trait::async_trait;
 use axum::{
     extract::{
         Query, State, WebSocketUpgrade,
@@ -66,12 +66,95 @@ use axum::{
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
+use parking_lot::Mutex;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
-use zeroclaw_api::channel::ChannelApprovalResponse;
+use uuid::Uuid;
+use zeroclaw_api::agent::TurnEvent;
+use zeroclaw_api::channel::{
+    Channel, ChannelApprovalRequest, ChannelApprovalResponse, ChannelMessage, SendMessage,
+};
+
+/// Shared map keyed by `request_id`. Consumed by the receive loop to resolve
+/// the oneshot when an `approval_response` frame arrives.
+pub type PendingApprovals = Arc<Mutex<HashMap<String, oneshot::Sender<ChannelApprovalResponse>>>>;
+
+/// Construct an empty pending-approvals registry for a fresh connection.
+pub fn new_pending_approvals() -> PendingApprovals {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// `Channel` implementation that emits approval frames over a connection's
+/// existing `event_tx` and parks on a oneshot until the matching response
+/// arrives or `timeout` elapses.
+pub struct WsApprovalChannel {
+    event_tx: mpsc::Sender<TurnEvent>,
+    pending: PendingApprovals,
+    timeout: Duration,
+}
+
+impl WsApprovalChannel {
+    pub fn new(
+        event_tx: mpsc::Sender<TurnEvent>,
+        pending: PendingApprovals,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            event_tx,
+            pending,
+            timeout,
+        }
+    }
+}
+
+#[async_trait]
+impl Channel for WsApprovalChannel {
+    fn name(&self) -> &str {
+        "ws"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&self, _tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn request_approval(
+        &self,
+        _recipient: &str,
+        request: &ChannelApprovalRequest,
+    ) -> anyhow::Result<Option<ChannelApprovalResponse>> {
+        let request_id = Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().insert(request_id.clone(), tx);
+
+        let event = TurnEvent::ApprovalRequest {
+            request_id: request_id.clone(),
+            tool_name: request.tool_name.clone(),
+            arguments_summary: request.arguments_summary.clone(),
+            timeout_secs: self.timeout.as_secs(),
+        };
+        if self.event_tx.send(event).await.is_err() {
+            self.pending.lock().remove(&request_id);
+            return Ok(None);
+        }
+
+        match tokio::time::timeout(self.timeout, rx).await {
+            Ok(Ok(decision)) => Ok(Some(decision)),
+            Ok(Err(_)) | Err(_) => {
+                self.pending.lock().remove(&request_id);
+                Ok(Some(ChannelApprovalResponse::Deny))
+            }
+        }
+    }
+}
 
 /// Default wall-clock budget for the operator to answer an
 /// `approval_request` frame before the channel auto-denies. Mirrors the
@@ -451,26 +534,6 @@ async fn handle_socket(
                 };
 
                 let msg_type = parsed["type"].as_str().unwrap_or("");
-
-                // ── Voice duplex event dispatch (gated by feature flag + runtime config) ──
-                #[cfg(feature = "gateway-voice-duplex")]
-                {
-                    let duplex_enabled = state
-                        .config
-                        .lock()
-                        .channels
-                        .voice_duplex
-                        .as_ref()
-                        .is_some_and(|v| v.enabled);
-                    if duplex_enabled {
-                        if let Some(voice_event) = crate::voice_duplex::try_parse_voice_event(&msg) {
-                            if let Some(error_frame) = crate::voice_duplex::handle_voice_event(voice_event) {
-                                let _ = sender.send(Message::Text(error_frame.to_string().into())).await;
-                            }
-                            continue;
-                        }
-                    }
-                }
 
                 // ── approval_response (operator answered a tool prompt) ──
                 if msg_type == "approval_response" {
