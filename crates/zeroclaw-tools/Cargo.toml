@@ -12,6 +12,7 @@ zeroclaw-config = { workspace = true, default-features = true }
 zeroclaw-providers.workspace = true
 zeroclaw-memory.workspace = true
 zeroclaw-infra.workspace = true
+osagent-tools-mcp = { path = "../osagent-tools-mcp", version = "0.1.0" }
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"

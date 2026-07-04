@@ -296,7 +296,7 @@ agent-runtime = [
     "dep:rustls", "dep:rustls-pemfile", "dep:rustls-pki-types", "dep:tokio-rustls", "dep:webpki-roots",
     # Phase 1.5 strip: removed dep:lettre/mail-parser/async-imap (email channel dropped)
     "channel-telegram", "channel-slack", "channel-signal",
-    "channel-mattermost", "channel-whatsapp-cloud", "channel-matrix",
+    "channel-mattermost", "channel-whatsapp-cloud",
 ]
 
 # Major subsystems — each forwards to exactly ONE crate
@@ -366,7 +366,6 @@ metrics = ["observability-prometheus"]
 # Phase 1.5 will strip the remaining non-v1 channels (nostr/matrix/etc.).
 ci-all = [
     "agent-runtime",
-    "channel-matrix",
     "observability-prometheus",
     "sandbox-landlock", "sandbox-bubblewrap",
     "browser-native", "rag-pdf",
