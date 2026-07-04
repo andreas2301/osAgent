@@ -10,13 +10,12 @@
 //!              SDKs are AGPL-3.0 and banned in deny.toml)
 //!   - cli      (always-on; for engineer interactive mode)
 //!
-//! Phase 1.5 stripped 26 channels at the source level: discord, irc, email,
-//! gmail-push, voice-call, voice-wake, whatsapp-web (Selenium), twitter, reddit,
-//! bluesky, nostr, line, wechat, wecom, qq, dingtalk, lark, feishu, clawdtalk,
-//! nextcloud, linq, wati, imessage, mochat, notion, acp-server.
-//! Phase 1.4 stripped: webhook (user-rejected on security grounds).
+//! Dropped channels (modules removed, imports cleaned up in Phase 1.5):
+//! bluesky, clawdtalk, dingtalk, discord, discord_history, imessage, irc,
+//! linq, mochat, nextcloud_talk, notion, qq, reddit, twitter, wati, webhook,
+//! wecom, nostr, wechat.
 //!
-//! Phase 1.5 also stripped voice-adjacent support modules: transcription, tts.
+//! Voice-adjacent support modules transcription and tts were also stripped.
 
 pub mod orchestrator;
 pub mod util;
