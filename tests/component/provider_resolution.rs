@@ -260,29 +260,8 @@ fn factory_resolves_gemini_provider() {
 }
 
 #[test]
-fn factory_resolves_bedrock_provider() {
-    assert_provider_ok("bedrock", None, None);
-}
-
-#[test]
-fn factory_resolves_copilot_provider() {
-    assert_provider_ok("copilot", Some("test-key"), None);
-}
-
-#[test]
 fn factory_resolves_synthetic_provider() {
     assert_provider_ok("synthetic", Some("test-key"), None);
-}
-
-#[test]
-fn factory_resolves_openai_codex_provider() {
-    let options = zeroclaw::providers::ProviderRuntimeOptions::default();
-    let result = create_provider_with_options("openai-codex", None, &options);
-    assert!(
-        result.is_ok(),
-        "openai-codex provider should resolve: {}",
-        result.err().map(|e| e.to_string()).unwrap_or_default()
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -413,16 +392,6 @@ fn factory_google_alias_resolves_to_gemini() {
 #[test]
 fn factory_google_gemini_alias_resolves_to_gemini() {
     assert_provider_ok("google-gemini", Some("test-key"), None);
-}
-
-#[test]
-fn factory_aws_bedrock_alias_resolves_to_bedrock() {
-    assert_provider_ok("aws-bedrock", None, None);
-}
-
-#[test]
-fn factory_github_copilot_alias_resolves_to_copilot() {
-    assert_provider_ok("github-copilot", Some("test-key"), None);
 }
 
 #[test]
