@@ -351,13 +351,11 @@ observability-prometheus = [
 # hardware/peripheral-rpi/probe/plugins-wasm features removed in Phase 1.4
 sandbox-landlock = ["zeroclaw-runtime/sandbox-landlock"]
 sandbox-bubblewrap = ["zeroclaw-runtime/sandbox-bubblewrap"]
-browser-native = ["zeroclaw-tools/browser-native"]
 rag-pdf = ["zeroclaw-tools/rag-pdf", "zeroclaw-runtime/rag-pdf"]
 webauthn = ["zeroclaw-runtime/webauthn"]
 embedded-web = ["zeroclaw-gateway/embedded-web"]
 
 # Backward-compatible aliases
-fantoccini = ["browser-native"]
 landlock = ["sandbox-landlock"]
 metrics = ["observability-prometheus"]
 
@@ -368,7 +366,7 @@ ci-all = [
     "agent-runtime",
     "observability-prometheus",
     "sandbox-landlock", "sandbox-bubblewrap",
-    "browser-native", "rag-pdf",
+    "rag-pdf",
     "webauthn", "memory-postgres",
 ]
 
