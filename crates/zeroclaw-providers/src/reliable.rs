@@ -1551,12 +1551,12 @@ mod tests {
 
         let provider = ReliableProvider::new(
             vec![(
-                "openai-codex".into(),
+                "openai".into(),
                 Box::new(MockProvider {
                     calls: Arc::clone(&calls),
                     fail_until_attempt: usize::MAX,
                     response: "never",
-                    error: "OpenAI Codex stream error: Your input exceeds the context window of this model. Please adjust your input and try again.",
+                    error: "OpenAI stream error: Your input exceeds the context window of this model. Please adjust your input and try again.",
                 }),
             )],
             4,

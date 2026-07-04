@@ -637,10 +637,7 @@ mod tests {
 
     #[test]
     fn profile_id_format() {
-        assert_eq!(
-            profile_id("openai-codex", "default"),
-            "openai-codex:default"
-        );
+        assert_eq!(profile_id("openai", "default"), "openai:default");
     }
 
     #[test]
@@ -664,7 +661,7 @@ mod tests {
         let store = AuthProfilesStore::new(tmp.path(), true);
 
         let mut profile = AuthProfile::new_oauth(
-            "openai-codex",
+            "openai",
             "default",
             TokenSet {
                 access_token: "access-123".into(),
@@ -682,7 +679,7 @@ mod tests {
         let data = store.load().await.unwrap();
         let loaded = data.profiles.get(&profile.id).unwrap();
 
-        assert_eq!(loaded.provider, "openai-codex");
+        assert_eq!(loaded.provider, "openai");
         assert_eq!(loaded.profile_name, "default");
         assert_eq!(loaded.account_id.as_deref(), Some("acct_123"));
         assert_eq!(
