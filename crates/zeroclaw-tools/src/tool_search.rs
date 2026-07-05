@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::mcp_deferred::{ActivatedToolSet, DeferredMcpToolSet};
+use osagent_tools_mcp::mcp_deferred::{ActivatedToolSet, DeferredMcpToolSet};
 use zeroclaw_api::tool::{Tool, ToolResult};
 
 /// Default maximum number of search results.
@@ -194,9 +194,9 @@ impl ToolSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp_client::McpRegistry;
-    use crate::mcp_deferred::DeferredMcpToolStub;
-    use crate::mcp_protocol::McpToolDef;
+    use osagent_tools_mcp::mcp_client::McpRegistry;
+    use osagent_tools_mcp::mcp_deferred::DeferredMcpToolStub;
+    use osagent_tools_mcp::mcp_protocol::McpToolDef;
 
     async fn make_deferred_set(stubs: Vec<DeferredMcpToolStub>) -> DeferredMcpToolSet {
         let registry = Arc::new(McpRegistry::connect_all(&[]).await.unwrap());

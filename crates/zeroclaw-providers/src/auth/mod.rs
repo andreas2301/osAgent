@@ -350,8 +350,7 @@ impl AuthService {
 pub fn normalize_provider(provider: &str) -> Result<String> {
     let normalized = provider.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "openai-codex" | "openai_codex" | "codex" => Ok(OPENAI_CODEX_PROVIDER.to_string()),
-        "anthropic" | "claude" | "claude-code" => Ok(ANTHROPIC_PROVIDER.to_string()),
+        "anthropic" | "claude" => Ok(ANTHROPIC_PROVIDER.to_string()),
         "gemini" | "google" | "vertex" => Ok(GEMINI_PROVIDER.to_string()),
         other if !other.is_empty() => Ok(other.to_string()),
         _ => anyhow::bail!("Provider name cannot be empty"),
@@ -515,7 +514,6 @@ mod tests {
 
     #[test]
     fn normalize_provider_aliases() {
-        assert_eq!(normalize_provider("codex").unwrap(), "openai-codex");
         assert_eq!(normalize_provider("claude").unwrap(), "anthropic");
         assert_eq!(normalize_provider("openai").unwrap(), "openai");
     }
@@ -523,14 +521,14 @@ mod tests {
     #[test]
     fn select_profile_prefers_override_then_active_then_default() {
         let mut data = AuthProfilesData::default();
-        let id_active = profile_id("openai-codex", "work");
-        let id_default = profile_id("openai-codex", "default");
+        let id_active = profile_id("gemini", "work");
+        let id_default = profile_id("gemini", "default");
 
         data.profiles.insert(
             id_default.clone(),
             AuthProfile {
                 id: id_default.clone(),
-                provider: "openai-codex".into(),
+                provider: "gemini".into(),
                 profile_name: "default".into(),
                 kind: AuthProfileKind::Token,
                 account_id: None,
@@ -546,7 +544,7 @@ mod tests {
             id_active.clone(),
             AuthProfile {
                 id: id_active.clone(),
-                provider: "openai-codex".into(),
+                provider: "gemini".into(),
                 profile_name: "work".into(),
                 kind: AuthProfileKind::Token,
                 account_id: None,
@@ -560,14 +558,14 @@ mod tests {
         );
 
         data.active_profiles
-            .insert("openai-codex".into(), id_active.clone());
+            .insert("gemini".into(), id_active.clone());
 
         assert_eq!(
-            select_profile_id(&data, "openai-codex", Some("default")),
+            select_profile_id(&data, "gemini", Some("default")),
             Some(id_default)
         );
         assert_eq!(
-            select_profile_id(&data, "openai-codex", None),
+            select_profile_id(&data, "gemini", None),
             Some(id_active)
         );
     }

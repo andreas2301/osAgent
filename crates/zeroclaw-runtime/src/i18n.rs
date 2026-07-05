@@ -106,11 +106,10 @@ fn load_cli_ftl_sources(locale: &str) -> CliFtlSources {
     }
 }
 
-fn builtin_cli_ftl_source(locale: &str) -> Option<&'static str> {
-    match locale {
-        "zh-CN" => Some(include_str!("../locales/zh-CN/cli.ftl")),
-        _ => None,
-    }
+fn builtin_cli_ftl_source(_locale: &str) -> Option<&'static str> {
+    // Phase 1.5 stripped all non-English locales. English is embedded directly
+    // by callers; disk locales may still be loaded but there are no built-ins.
+    None
 }
 
 fn format_cli_string_with_args(
@@ -278,68 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn zh_cn_wechat_translations_preserve_machine_facing_tokens() {
-        let zh_cn = include_str!("../locales/zh-CN/cli.ftl");
-        let bind = format_ftl_message(
-            zh_cn,
-            "zh-CN",
-            "cli-wechat-send-bind-command",
-            &[("command", "/bind")],
-        )
-        .expect("zh-CN bind command should format");
-        assert!(bind.contains("WeChat"));
-        assert!(bind.contains("/bind"));
-        assert!(bind.contains("<code>"));
-
-        let success = format_ftl_message(zh_cn, "zh-CN", "cli-wechat-bound-success", &[])
-            .expect("zh-CN bind success should format");
-        assert!(success.contains("WeChat"));
-        assert!(success.contains("ZeroClaw"));
-    }
-
-    #[test]
-    fn zh_cn_cli_strings_load_from_builtin_source() {
-        let map = load_cli_strings("zh-CN");
-        assert_eq!(
-            map.get("cli-wechat-connected").map(String::as_str),
-            Some("✅ WeChat 已连接！")
-        );
-
-        let sources = load_cli_ftl_sources("zh-CN");
-        let value = format_cli_string_with_args(
-            &sources,
-            "cli-wechat-pairing-required",
-            &[("code", "123456")],
-        )
-        .expect("zh-CN built-in CLI source should format args");
-        assert!(value.contains("WeChat"));
-        assert!(value.contains("123456"));
-        assert!(value.contains("需要绑定"));
-    }
-
-    #[test]
-    fn argumented_cli_strings_fall_back_from_disk_to_builtin_locale() {
-        let sources = CliFtlSources {
-            locale: "zh-CN".to_string(),
-            disk: Some("cli-wechat-connected = stale workspace override".to_string()),
-            builtin: builtin_cli_ftl_source("zh-CN"),
-        };
-
-        let overridden = format_cli_string_with_args(&sources, "cli-wechat-connected", &[])
-            .expect("disk override should still win when present");
-        assert_eq!(overridden, "stale workspace override");
-
-        let built_in = format_cli_string_with_args(
-            &sources,
-            "cli-wechat-pairing-required",
-            &[("code", "123456")],
-        )
-        .expect("missing disk key should fall back to built-in zh-CN");
-        assert!(built_in.contains("123456"));
-        assert!(built_in.contains("需要绑定"));
-    }
-
-    #[test]
     fn wechat_cli_strings_format_from_fluent() {
         let keys = [
             (
@@ -394,10 +331,7 @@ mod tests {
             ),
             ("cli-wechat-invalid-bind-code", &[][..], [].as_slice()),
         ];
-        for source in [
-            (include_str!("../locales/en/cli.ftl"), "en"),
-            (include_str!("../locales/zh-CN/cli.ftl"), "zh-CN"),
-        ] {
+        for source in [(include_str!("../locales/en/cli.ftl"), "en")] {
             for (key, args, expected_parts) in keys {
                 let value = format_ftl_message(source.0, source.1, key, args)
                     .unwrap_or_else(|| panic!("{key} should format in {}", source.1));

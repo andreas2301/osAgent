@@ -23,44 +23,21 @@ pub mod media_pipeline;
 pub mod mqtt;
 
 // Channel types imported directly from source crates (no shim files)
-pub use crate::bluesky::BlueskyChannel;
-pub use crate::clawdtalk::ClawdTalkChannel;
-pub use crate::dingtalk::DingTalkChannel;
-pub use crate::discord::DiscordChannel;
-pub use crate::discord_history::DiscordHistoryChannel;
 #[cfg(feature = "channel-email")]
 pub use crate::email_channel::EmailChannel;
 #[cfg(feature = "channel-email")]
 pub use crate::gmail_push::GmailPushChannel;
-pub use crate::imessage::IMessageChannel;
-pub use crate::irc::IrcChannel;
 #[cfg(feature = "channel-lark")]
 pub use crate::lark::LarkChannel;
 #[cfg(feature = "channel-line")]
 pub use crate::line::LineChannel;
-pub use crate::linq::LinqChannel;
 pub use crate::mattermost::MattermostChannel;
-pub use crate::mochat::MochatChannel;
-pub use crate::nextcloud_talk::NextcloudTalkChannel;
-#[cfg(feature = "channel-nostr")]
-pub use crate::nostr::NostrChannel;
-pub use crate::notion::NotionChannel;
-pub use crate::qq::QQChannel;
-pub use crate::reddit::RedditChannel;
 pub use crate::signal::SignalChannel;
 pub use crate::slack::SlackChannel;
-pub use crate::transcription;
-pub use crate::tts::{TtsManager, TtsProvider};
-pub use crate::twitter::TwitterChannel;
 #[cfg(feature = "channel-voice-call")]
 pub use crate::voice_call::VoiceCallChannel;
 #[cfg(feature = "voice-wake")]
 pub use crate::voice_wake::VoiceWakeChannel;
-pub use crate::wati::WatiChannel;
-pub use crate::webhook::WebhookChannel;
-#[cfg(feature = "channel-wechat")]
-pub use crate::wechat::WeChatChannel;
-pub use crate::wecom::WeComChannel;
 pub use crate::whatsapp::WhatsAppChannel;
 pub use zeroclaw_api::channel::{Channel, ChannelMessage, SendMessage};
 // Local channel types (in misc, not zeroclaw-channels)
@@ -315,7 +292,6 @@ const OPENRC_RESTART_ARGS: [&str; 2] = ["zeroclaw", "restart"];
 struct InterruptOnNewMessageConfig {
     telegram: bool,
     slack: bool,
-    discord: bool,
     mattermost: bool,
     matrix: bool,
 }
@@ -325,7 +301,6 @@ impl InterruptOnNewMessageConfig {
         match channel {
             "telegram" => self.telegram,
             "slack" => self.slack,
-            "discord" => self.discord,
             "mattermost" => self.mattermost,
             "matrix" => self.matrix,
             _ => false,
@@ -367,7 +342,6 @@ struct ChannelRuntimeContext {
     interrupt_on_new_message: InterruptOnNewMessageConfig,
     multimodal: zeroclaw_config::schema::MultimodalConfig,
     media_pipeline: zeroclaw_config::schema::MediaPipelineConfig,
-    transcription_config: zeroclaw_config::schema::TranscriptionConfig,
     hooks: Option<Arc<zeroclaw_runtime::hooks::HookRunner>>,
     non_cli_excluded_tools: Arc<Vec<String>>,
     autonomy_level: AutonomyLevel,
@@ -620,23 +594,6 @@ fn channel_delivery_instructions(channel_name: &str) -> Option<&'static str> {
              - Keep normal text outside markers and never wrap markers in code fences.\n\
              - Use tool results silently: answer the latest user message directly, and do not narrate delayed/internal tool execution bookkeeping.",
         ),
-        "qq" => Some(
-            "When responding on QQ:\n\
-             - Use Markdown formatting\n\
-             - Be concise and direct\n\
-             - For media attachments use markers: [IMAGE:<path-or-url>], [DOCUMENT:<path-or-url>], \
-               [VIDEO:<path-or-url>], [VOICE:<path-or-url>]\n\
-             - Voice supports .wav, .mp3, .silk formats only. Other audio formats use [DOCUMENT:]\n\
-             - Keep normal text outside markers and never wrap markers in code fences.\n",
-        ),
-        "wechat" => Some(
-            "When responding on WeChat:\n\
-             - Be concise and direct\n\
-             - For media attachments use markers: [IMAGE:<path-or-url>], [DOCUMENT:<path-or-url>], \
-               [VIDEO:<path-or-url>], [AUDIO:<path-or-url>], or [VOICE:<path-or-url>]\n\
-             - Keep normal text outside markers and never wrap markers in code fences.\n\
-             - Use absolute local paths when sending generated files whenever possible.\n",
-        ),
         _ => None,
     }
 }
@@ -772,7 +729,7 @@ fn strip_tool_summary_prefix(text: &str) -> String {
 }
 
 fn supports_runtime_model_switch(channel_name: &str) -> bool {
-    matches!(channel_name, "telegram" | "discord" | "matrix" | "slack")
+    matches!(channel_name, "telegram" | "matrix" | "slack")
 }
 
 fn parse_runtime_command(channel_name: &str, content: &str) -> Option<ChannelRuntimeCommand> {
@@ -2700,11 +2657,7 @@ async fn process_channel_message(
     // ── Media pipeline: enrich inbound message with media annotations ──
     if ctx.media_pipeline.enabled && !msg.attachments.is_empty() {
         let vision = ctx.provider.supports_vision();
-        let pipeline = media_pipeline::MediaPipeline::new(
-            &ctx.media_pipeline,
-            &ctx.transcription_config,
-            vision,
-        );
+        let pipeline = media_pipeline::MediaPipeline::new(&ctx.media_pipeline, vision);
         msg.content = Box::pin(pipeline.process(&msg.content, &msg.attachments)).await;
     }
 
@@ -4204,35 +4157,8 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 )
                 .with_ack_reactions(ack)
                 .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
-                .with_transcription(config.transcription.clone())
-                .with_tts(config.tts.clone())
                 .with_workspace_dir(config.workspace_dir.clone())
                 .with_approval_timeout_secs(tg.approval_timeout_secs),
-            ))
-        }
-        "discord" => {
-            let dc = config
-                .channels
-                .discord
-                .as_ref()
-                .context("Discord channel is not configured")?;
-            Ok(Arc::new(
-                DiscordChannel::new(
-                    dc.bot_token.clone(),
-                    dc.guild_id.clone(),
-                    dc.allowed_users.clone(),
-                    dc.listen_to_bots,
-                    dc.mention_only,
-                )
-                .with_workspace_dir(config.workspace_dir.clone())
-                .with_streaming(
-                    dc.stream_mode,
-                    dc.draft_update_interval_ms,
-                    dc.multi_message_delay_ms,
-                )
-                .with_transcription(config.transcription.clone())
-                .with_stall_timeout(dc.stall_timeout_secs)
-                .with_approval_timeout_secs(dc.approval_timeout_secs),
             ))
         }
         "slack" => {
@@ -4250,7 +4176,6 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 )
                 .with_workspace_dir(config.workspace_dir.clone())
                 .with_markdown_blocks(sl.use_markdown_blocks)
-                .with_transcription(config.transcription.clone())
                 .with_streaming(sl.stream_drafts, sl.draft_update_interval_ms)
                 .with_cancel_reaction(sl.cancel_reaction.clone())
                 .with_approval_timeout_secs(sl.approval_timeout_secs),
@@ -4304,7 +4229,6 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                     .unwrap_or_else(|| std::path::PathBuf::from(".zeroclaw/state/matrix"));
                 Ok(Arc::new(
                     MatrixChannel::new(mx.clone(), state_dir)?
-                        .with_transcription(config.transcription.clone())
                         .with_workspace_dir(config.workspace_dir.clone()),
                 ))
             }
@@ -4343,18 +4267,6 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 anyhow::bail!("WhatsApp channel requires the `whatsapp-web` feature");
             }
         }
-        "qq" => {
-            let qq = config
-                .channels
-                .qq
-                .as_ref()
-                .context("QQ channel is not configured")?;
-            Ok(Arc::new(QQChannel::new(
-                qq.app_id.clone(),
-                qq.app_secret.clone(),
-                qq.allowed_users.clone(),
-            )))
-        }
         "lark" => {
             #[cfg(feature = "channel-lark")]
             {
@@ -4389,93 +4301,6 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 anyhow::bail!("Feishu channel requires the `channel-lark` feature");
             }
         }
-        "dingtalk" => {
-            let dt = config
-                .channels
-                .dingtalk
-                .as_ref()
-                .context("DingTalk channel is not configured")?;
-            Ok(Arc::new(
-                DingTalkChannel::new(
-                    dt.client_id.clone(),
-                    dt.client_secret.clone(),
-                    dt.allowed_users.clone(),
-                )
-                .with_proxy_url(dt.proxy_url.clone()),
-            ))
-        }
-        "wecom" => {
-            let wc = config
-                .channels
-                .wecom
-                .as_ref()
-                .context("WeCom channel is not configured")?;
-            Ok(Arc::new(WeComChannel::new(
-                wc.webhook_key.clone(),
-                wc.allowed_users.clone(),
-            )))
-        }
-        #[cfg(feature = "channel-wechat")]
-        "wechat" => {
-            let wc = config
-                .channels
-                .wechat
-                .as_ref()
-                .context("WeChat channel is not configured")?;
-            Ok(Arc::new(
-                WeChatChannel::new(
-                    wc.allowed_users.clone(),
-                    wc.api_base_url.clone(),
-                    wc.cdn_base_url.clone(),
-                    wc.state_dir.as_ref().map(std::path::PathBuf::from),
-                )?
-                .with_workspace_dir(config.workspace_dir.clone()),
-            ))
-        }
-        #[cfg(not(feature = "channel-wechat"))]
-        "wechat" => {
-            anyhow::bail!("WeChat channel requires the `channel-wechat` feature");
-        }
-        "nextcloud_talk" | "nextcloud-talk" => {
-            let nc = config
-                .channels
-                .nextcloud_talk
-                .as_ref()
-                .context("Nextcloud Talk channel is not configured")?;
-            Ok(Arc::new(NextcloudTalkChannel::new_with_proxy(
-                nc.base_url.clone(),
-                nc.app_token.clone(),
-                nc.bot_name.clone().unwrap_or_default(),
-                nc.allowed_users.clone(),
-                nc.proxy_url.clone(),
-            )))
-        }
-        "wati" => {
-            let wati_cfg = config
-                .channels
-                .wati
-                .as_ref()
-                .context("WATI channel is not configured")?;
-            Ok(Arc::new(WatiChannel::new_with_proxy(
-                wati_cfg.api_token.clone(),
-                wati_cfg.api_url.clone(),
-                wati_cfg.tenant_id.clone(),
-                wati_cfg.allowed_numbers.clone(),
-                wati_cfg.proxy_url.clone(),
-            )))
-        }
-        "linq" => {
-            let lq = config
-                .channels
-                .linq
-                .as_ref()
-                .context("Linq channel is not configured")?;
-            Ok(Arc::new(LinqChannel::new(
-                lq.api_token.clone(),
-                lq.from_phone.clone(),
-                lq.allowed_senders.clone(),
-            )))
-        }
         #[cfg(feature = "channel-email")]
         "email" => {
             let em = config
@@ -4493,77 +4318,6 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
                 .as_ref()
                 .context("Gmail Push channel is not configured")?;
             Ok(Arc::new(GmailPushChannel::new(gp.clone())))
-        }
-        "irc" => {
-            let irc_cfg = config
-                .channels
-                .irc
-                .as_ref()
-                .context("IRC channel is not configured")?;
-            Ok(Arc::new(IrcChannel::new(crate::irc::IrcChannelConfig {
-                server: irc_cfg.server.clone(),
-                port: irc_cfg.port,
-                nickname: irc_cfg.nickname.clone(),
-                username: irc_cfg.username.clone(),
-                channels: irc_cfg.channels.clone(),
-                allowed_users: irc_cfg.allowed_users.clone(),
-                server_password: irc_cfg.server_password.clone(),
-                nickserv_password: irc_cfg.nickserv_password.clone(),
-                sasl_password: irc_cfg.sasl_password.clone(),
-                verify_tls: irc_cfg.verify_tls.unwrap_or(true),
-                mention_only: irc_cfg.mention_only,
-            })))
-        }
-        "twitter" => {
-            let tw = config
-                .channels
-                .twitter
-                .as_ref()
-                .context("X/Twitter channel is not configured")?;
-            Ok(Arc::new(TwitterChannel::new(
-                tw.bearer_token.clone(),
-                tw.allowed_users.clone(),
-            )))
-        }
-        "mochat" => {
-            let mc = config
-                .channels
-                .mochat
-                .as_ref()
-                .context("Mochat channel is not configured")?;
-            Ok(Arc::new(MochatChannel::new(
-                mc.api_url.clone(),
-                mc.api_token.clone(),
-                mc.allowed_users.clone(),
-                mc.poll_interval_secs,
-            )))
-        }
-        "discord_history" | "discord-history" => {
-            let dh = config
-                .channels
-                .discord_history
-                .as_ref()
-                .context("Discord History channel is not configured")?;
-            let discord_mem =
-                zeroclaw_memory::SqliteMemory::new_named(&config.workspace_dir, "discord")
-                    .context("Discord History: failed to open discord.db")?;
-            Ok(Arc::new(DiscordHistoryChannel::new(
-                dh.bot_token.clone(),
-                dh.guild_id.clone(),
-                dh.allowed_users.clone(),
-                dh.channel_ids.clone(),
-                Arc::new(discord_mem),
-                dh.store_dms,
-                dh.respond_to_dms,
-            )))
-        }
-        "imessage" => {
-            let im = config
-                .channels
-                .imessage
-                .as_ref()
-                .context("iMessage channel is not configured")?;
-            Ok(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())))
         }
         "line" => {
             #[cfg(feature = "channel-line")]
@@ -4596,9 +4350,8 @@ fn build_channel_by_id(config: &Config, channel_id: &str) -> Result<Arc<dyn Chan
             }
         }
         other => anyhow::bail!(
-            "Unknown channel '{other}'. Supported: telegram, discord, slack, mattermost, signal, \
-            matrix, whatsapp, qq, lark, feishu, dingtalk, wecom, nextcloud_talk, wati, linq, \
-            email, gmail_push, irc, twitter, mochat, discord_history, imessage, line, voice-call"
+            "Unknown channel '{other}'. Supported: telegram, slack, mattermost, signal, \
+            matrix, whatsapp"
         ),
     }
 }
@@ -4665,8 +4418,6 @@ fn collect_configured_channels(
                     )
                     .with_ack_reactions(ack)
                     .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
-                    .with_transcription(config.transcription.clone())
-                    .with_tts(config.tts.clone())
                     .with_workspace_dir(config.workspace_dir.clone())
                     .with_proxy_url(tg.proxy_url.clone())
                     .with_tool_command_specs(tool_specs.to_vec())
@@ -4678,91 +4429,7 @@ fn collect_configured_channels(
         }
     }
 
-    if let Some(ref dc) = config.channels.discord {
-        if dc.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Discord",
-                channel: Arc::new(
-                    DiscordChannel::new(
-                        dc.bot_token.clone(),
-                        dc.guild_id.clone(),
-                        dc.allowed_users.clone(),
-                        dc.listen_to_bots,
-                        dc.mention_only,
-                    )
-                    .with_workspace_dir(config.workspace_dir.clone())
-                    .with_streaming(
-                        dc.stream_mode,
-                        dc.draft_update_interval_ms,
-                        dc.multi_message_delay_ms,
-                    )
-                    .with_proxy_url(dc.proxy_url.clone())
-                    .with_transcription(config.transcription.clone())
-                    .with_stall_timeout(dc.stall_timeout_secs)
-                    .with_approval_timeout_secs(dc.approval_timeout_secs),
-                ),
-            });
-        } else {
-            tracing::info!("Discord channel configured but disabled (enabled = false)");
-        }
-    }
 
-    if let Some(ref dh) = config.channels.discord_history {
-        if dh.enabled {
-            match zeroclaw_memory::SqliteMemory::new_named(&config.workspace_dir, "discord") {
-                Ok(discord_mem) => {
-                    channels.push(ConfiguredChannel {
-                        display_name: "Discord History",
-                        channel: Arc::new(
-                            DiscordHistoryChannel::new(
-                                dh.bot_token.clone(),
-                                dh.guild_id.clone(),
-                                dh.allowed_users.clone(),
-                                dh.channel_ids.clone(),
-                                Arc::new(discord_mem),
-                                dh.store_dms,
-                                dh.respond_to_dms,
-                            )
-                            .with_proxy_url(dh.proxy_url.clone()),
-                        ),
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("discord_history: failed to open discord.db: {e}");
-                }
-            }
-        } else {
-            tracing::info!("Discord History channel configured but disabled (enabled = false)");
-        }
-    }
-
-    if let Some(ref sl) = config.channels.slack {
-        if sl.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Slack",
-                channel: Arc::new(
-                    SlackChannel::new(
-                        sl.bot_token.clone(),
-                        sl.app_token.clone(),
-                        sl.channel_ids.clone(),
-                        sl.allowed_users.clone(),
-                    )
-                    .with_thread_replies(sl.thread_replies.unwrap_or(true))
-                    .with_group_reply_policy(sl.mention_only, Vec::new())
-                    .with_strict_mention_in_thread(sl.strict_mention_in_thread)
-                    .with_workspace_dir(config.workspace_dir.clone())
-                    .with_markdown_blocks(sl.use_markdown_blocks)
-                    .with_proxy_url(sl.proxy_url.clone())
-                    .with_transcription(config.transcription.clone())
-                    .with_streaming(sl.stream_drafts, sl.draft_update_interval_ms)
-                    .with_cancel_reaction(sl.cancel_reaction.clone())
-                    .with_approval_timeout_secs(sl.approval_timeout_secs),
-                ),
-            });
-        } else {
-            tracing::info!("Slack channel configured but disabled (enabled = false)");
-        }
-    }
 
     if let Some(ref mm) = config.channels.mattermost {
         if mm.enabled {
@@ -4777,8 +4444,7 @@ fn collect_configured_channels(
                         mm.thread_replies.unwrap_or(true),
                         mm.mention_only.unwrap_or(false),
                     )
-                    .with_proxy_url(mm.proxy_url.clone())
-                    .with_transcription(config.transcription.clone()),
+                    .with_proxy_url(mm.proxy_url.clone()),
                 ),
             });
         } else {
@@ -4786,16 +4452,6 @@ fn collect_configured_channels(
         }
     }
 
-    if let Some(ref im) = config.channels.imessage {
-        if im.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "iMessage",
-                channel: Arc::new(IMessageChannel::new(im.allowed_contacts.clone())),
-            });
-        } else {
-            tracing::info!("iMessage channel configured but disabled (enabled = false)");
-        }
-    }
 
     #[cfg(feature = "channel-matrix")]
     if let Some(ref mx) = config.channels.matrix {
@@ -4807,9 +4463,7 @@ fn collect_configured_channels(
                 .unwrap_or_else(|| std::path::PathBuf::from(".zeroclaw/state/matrix"));
             match MatrixChannel::new(mx.clone(), state_dir) {
                 Ok(channel) => {
-                    let channel = channel
-                        .with_transcription(config.transcription.clone())
-                        .with_workspace_dir(config.workspace_dir.clone());
+                    let channel = channel.with_workspace_dir(config.workspace_dir.clone());
                     channels.push(ConfiguredChannel {
                         display_name: "Matrix",
                         channel: Arc::new(channel),
@@ -4905,8 +4559,6 @@ fn collect_configured_channels(
                                     wa.group_policy.clone(),
                                     wa.self_chat_mode,
                                 )
-                                .with_transcription(config.transcription.clone())
-                                .with_tts(config.tts.clone())
                                 .with_dm_mention_patterns(wa.dm_mention_patterns.clone())
                                 .with_group_mention_patterns(wa.group_mention_patterns.clone()),
                             ),
@@ -4936,57 +4588,8 @@ fn collect_configured_channels(
         }
     }
 
-    if let Some(ref lq) = config.channels.linq {
-        if lq.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Linq",
-                channel: Arc::new(LinqChannel::new(
-                    lq.api_token.clone(),
-                    lq.from_phone.clone(),
-                    lq.allowed_senders.clone(),
-                )),
-            });
-        } else {
-            tracing::info!("Linq channel configured but disabled (enabled = false)");
-        }
-    }
 
-    if let Some(ref wati_cfg) = config.channels.wati {
-        if wati_cfg.enabled {
-            let wati_channel = WatiChannel::new_with_proxy(
-                wati_cfg.api_token.clone(),
-                wati_cfg.api_url.clone(),
-                wati_cfg.tenant_id.clone(),
-                wati_cfg.allowed_numbers.clone(),
-                wati_cfg.proxy_url.clone(),
-            )
-            .with_transcription(config.transcription.clone());
 
-            channels.push(ConfiguredChannel {
-                display_name: "WATI",
-                channel: Arc::new(wati_channel),
-            });
-        } else {
-            tracing::info!("WATI channel configured but disabled (enabled = false)");
-        }
-    }
-
-    if let Some(ref nc) = config.channels.nextcloud_talk {
-        if nc.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Nextcloud Talk",
-                channel: Arc::new(NextcloudTalkChannel::new_with_proxy(
-                    nc.base_url.clone(),
-                    nc.app_token.clone(),
-                    nc.bot_name.clone().unwrap_or_default(),
-                    nc.allowed_users.clone(),
-                    nc.proxy_url.clone(),
-                )),
-            });
-        } else {
-            tracing::info!("Nextcloud Talk channel configured but disabled (enabled = false)");
-        }
-    }
 
     #[cfg(feature = "channel-email")]
     if let Some(ref email_cfg) = config.channels.email {
@@ -5010,28 +4613,6 @@ fn collect_configured_channels(
         });
     }
 
-    if let Some(ref irc) = config.channels.irc {
-        if irc.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "IRC",
-                channel: Arc::new(IrcChannel::new(crate::irc::IrcChannelConfig {
-                    server: irc.server.clone(),
-                    port: irc.port,
-                    nickname: irc.nickname.clone(),
-                    username: irc.username.clone(),
-                    channels: irc.channels.clone(),
-                    allowed_users: irc.allowed_users.clone(),
-                    server_password: irc.server_password.clone(),
-                    nickserv_password: irc.nickserv_password.clone(),
-                    sasl_password: irc.sasl_password.clone(),
-                    verify_tls: irc.verify_tls.unwrap_or(true),
-                    mention_only: irc.mention_only,
-                })),
-            });
-        } else {
-            tracing::info!("IRC channel configured but disabled (enabled = false)");
-        }
-    }
 
     #[cfg(feature = "channel-lark")]
     if let Some(ref lk) = config.channels.lark {
@@ -5047,19 +4628,13 @@ fn collect_configured_channels(
                     );
                     channels.push(ConfiguredChannel {
                         display_name: "Feishu",
-                        channel: Arc::new(
-                            LarkChannel::from_config(lk)
-                                .with_transcription(config.transcription.clone()),
-                        ),
+                        channel: Arc::new(LarkChannel::from_config(lk)),
                     });
                 }
             } else {
                 channels.push(ConfiguredChannel {
                     display_name: "Lark",
-                    channel: Arc::new(
-                        LarkChannel::from_lark_config(lk)
-                            .with_transcription(config.transcription.clone()),
-                    ),
+                    channel: Arc::new(LarkChannel::from_lark_config(lk)),
                 });
             }
         } else {
@@ -5072,10 +4647,7 @@ fn collect_configured_channels(
         if fs.enabled {
             channels.push(ConfiguredChannel {
                 display_name: "Feishu",
-                channel: Arc::new(
-                    LarkChannel::from_feishu_config(fs)
-                        .with_transcription(config.transcription.clone()),
-                ),
+                channel: Arc::new(LarkChannel::from_feishu_config(fs)),
             });
         } else {
             tracing::info!("Feishu channel configured but disabled (enabled = false)");
@@ -5094,9 +4666,7 @@ fn collect_configured_channels(
         if ln.enabled {
             channels.push(ConfiguredChannel {
                 display_name: "LINE",
-                channel: Arc::new(
-                    LineChannel::from_config(ln).with_transcription(config.transcription.clone()),
-                ),
+                channel: Arc::new(LineChannel::from_config(ln)),
             });
         } else {
             tracing::info!("LINE channel configured but disabled (enabled = false)");
@@ -5110,179 +4680,17 @@ fn collect_configured_channels(
         );
     }
 
-    if let Some(ref dt) = config.channels.dingtalk {
-        if dt.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "DingTalk",
-                channel: Arc::new(
-                    DingTalkChannel::new(
-                        dt.client_id.clone(),
-                        dt.client_secret.clone(),
-                        dt.allowed_users.clone(),
-                    )
-                    .with_proxy_url(dt.proxy_url.clone()),
-                ),
-            });
-        } else {
-            tracing::info!("DingTalk channel configured but disabled (enabled = false)");
-        }
-    }
 
-    if let Some(ref qq) = config.channels.qq {
-        if qq.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "QQ",
-                channel: Arc::new(
-                    QQChannel::new(
-                        qq.app_id.clone(),
-                        qq.app_secret.clone(),
-                        qq.allowed_users.clone(),
-                    )
-                    .with_workspace_dir(config.workspace_dir.clone())
-                    .with_proxy_url(qq.proxy_url.clone()),
-                ),
-            });
-        } else {
-            tracing::info!("QQ channel configured but disabled (enabled = false)");
-        }
-    }
 
-    if let Some(ref tw) = config.channels.twitter {
-        channels.push(ConfiguredChannel {
-            display_name: "X/Twitter",
-            channel: Arc::new(TwitterChannel::new(
-                tw.bearer_token.clone(),
-                tw.allowed_users.clone(),
-            )),
-        });
-    }
 
-    if let Some(ref mc) = config.channels.mochat {
-        if mc.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Mochat",
-                channel: Arc::new(MochatChannel::new(
-                    mc.api_url.clone(),
-                    mc.api_token.clone(),
-                    mc.allowed_users.clone(),
-                    mc.poll_interval_secs,
-                )),
-            });
-        } else {
-            tracing::info!("Mochat channel configured but disabled (enabled = false)");
-        }
-    }
 
-    if let Some(ref wc) = config.channels.wecom {
-        if wc.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "WeCom",
-                channel: Arc::new(WeComChannel::new(
-                    wc.webhook_key.clone(),
-                    wc.allowed_users.clone(),
-                )),
-            });
-        } else {
-            tracing::info!("WeCom channel configured but disabled (enabled = false)");
-        }
-    }
 
-    #[cfg(feature = "channel-wechat")]
-    if let Some(ref wechat) = config.channels.wechat {
-        if wechat.enabled {
-            match WeChatChannel::new(
-                wechat.allowed_users.clone(),
-                wechat.api_base_url.clone(),
-                wechat.cdn_base_url.clone(),
-                wechat.state_dir.as_ref().map(std::path::PathBuf::from),
-            ) {
-                Ok(channel) => {
-                    channels.push(ConfiguredChannel {
-                        display_name: "WeChat",
-                        channel: Arc::new(channel.with_workspace_dir(config.workspace_dir.clone())),
-                    });
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "WeChat channel configuration is invalid; skipping WeChat {matrix_skip_context}: {err}"
-                    );
-                }
-            }
-        } else {
-            tracing::info!("WeChat channel configured but disabled (enabled = false)");
-        }
-    }
 
-    #[cfg(not(feature = "channel-wechat"))]
-    if let Some(ref wechat) = config.channels.wechat
-        && wechat.enabled
-    {
-        tracing::warn!(
-            "WeChat channel is configured but this build was compiled without `channel-wechat`; skipping WeChat {matrix_skip_context}."
-        );
-    }
 
-    if let Some(ref ct) = config.channels.clawdtalk {
-        if ct.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "ClawdTalk",
-                channel: Arc::new(ClawdTalkChannel::new(ct.clone())),
-            });
-        } else {
-            tracing::info!("ClawdTalk channel configured but disabled (enabled = false)");
-        }
-    }
 
     // Notion database poller channel
-    if config.notion.enabled && !config.notion.database_id.trim().is_empty() {
-        let notion_api_key = if config.notion.api_key.trim().is_empty() {
-            std::env::var("NOTION_API_KEY").unwrap_or_default()
-        } else {
-            config.notion.api_key.trim().to_string()
-        };
-        if notion_api_key.trim().is_empty() {
-            tracing::warn!(
-                "Notion channel enabled but no API key found (set notion.api_key or NOTION_API_KEY env var)"
-            );
-        } else {
-            channels.push(ConfiguredChannel {
-                display_name: "Notion",
-                channel: Arc::new(NotionChannel::new(
-                    notion_api_key,
-                    config.notion.database_id.clone(),
-                    config.notion.poll_interval_secs,
-                    config.notion.status_property.clone(),
-                    config.notion.input_property.clone(),
-                    config.notion.result_property.clone(),
-                    config.notion.max_concurrent,
-                    config.notion.recover_stale,
-                )),
-            });
-        }
-    }
 
-    if let Some(ref rd) = config.channels.reddit {
-        channels.push(ConfiguredChannel {
-            display_name: "Reddit",
-            channel: Arc::new(RedditChannel::new(
-                rd.client_id.clone(),
-                rd.client_secret.clone(),
-                rd.refresh_token.clone(),
-                rd.username.clone(),
-                rd.subreddit.clone(),
-            )),
-        });
-    }
 
-    if let Some(ref bs) = config.channels.bluesky {
-        channels.push(ConfiguredChannel {
-            display_name: "Bluesky",
-            channel: Arc::new(BlueskyChannel::new(
-                bs.handle.clone(),
-                bs.app_password.clone(),
-            )),
-        });
-    }
 
     #[cfg(feature = "voice-wake")]
     if let Some(ref vw) = config.channels.voice_wake {
@@ -5307,23 +4715,6 @@ fn collect_configured_channels(
         }
     }
 
-    if let Some(ref wh) = config.channels.webhook {
-        if wh.enabled {
-            channels.push(ConfiguredChannel {
-                display_name: "Webhook",
-                channel: Arc::new(WebhookChannel::new(
-                    wh.port,
-                    wh.listen_path.clone(),
-                    wh.send_url.clone(),
-                    wh.send_method.clone(),
-                    wh.auth_header.clone(),
-                    wh.secret.clone(),
-                )),
-            });
-        } else {
-            tracing::info!("Webhook channel configured but disabled (enabled = false)");
-        }
-    }
 
     channels
 }
@@ -5333,15 +4724,6 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
     #[allow(unused_mut)]
     let mut channels = collect_configured_channels(&config, "health check", &[]);
 
-    #[cfg(feature = "channel-nostr")]
-    if let Some(ref ns) = config.channels.nostr {
-        channels.push(ConfiguredChannel {
-            display_name: "Nostr",
-            channel: Arc::new(
-                NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await?,
-            ),
-        });
-    }
 
     if channels.is_empty() {
         println!("No real-time channels configured. Run `zeroclaw onboard` first.");
@@ -5379,9 +4761,6 @@ pub async fn doctor_channels(config: Config) -> Result<()> {
         }
     }
 
-    if config.channels.webhook.is_some() {
-        println!("  ℹ️  Webhook   check via `zeroclaw gateway` then GET /health");
-    }
 
     println!();
     println!("Summary: {healthy} healthy, {unhealthy} unhealthy, {timeout} timed out");
@@ -5742,12 +5121,6 @@ pub async fn start_channels(
             .map(|configured| configured.channel)
             .collect();
 
-    #[cfg(feature = "channel-nostr")]
-    if let Some(ref ns) = config.channels.nostr {
-        channels.push(Arc::new(
-            NostrChannel::new(&ns.private_key, ns.relays.clone(), &ns.allowed_pubkeys).await?,
-        ));
-    }
     if channels.is_empty() {
         println!("No channels configured. Run `zeroclaw onboard` to set up channels.");
         return Ok(());
@@ -5852,11 +5225,6 @@ pub async fn start_channels(
         .slack
         .as_ref()
         .is_some_and(|sl| sl.interrupt_on_new_message);
-    let interrupt_on_new_message_discord = config
-        .channels
-        .discord
-        .as_ref()
-        .is_some_and(|dc| dc.interrupt_on_new_message);
     let interrupt_on_new_message_mattermost = config
         .channels
         .mattermost
@@ -5903,13 +5271,11 @@ pub async fn start_channels(
         interrupt_on_new_message: InterruptOnNewMessageConfig {
             telegram: interrupt_on_new_message,
             slack: interrupt_on_new_message_slack,
-            discord: interrupt_on_new_message_discord,
             mattermost: interrupt_on_new_message_mattermost,
             matrix: interrupt_on_new_message_matrix,
         },
         multimodal: config.multimodal.clone(),
         media_pipeline: config.media_pipeline.clone(),
-        transcription_config: config.transcription.clone(),
         hooks: if config.hooks.enabled {
             let mut runner = zeroclaw_runtime::hooks::HookRunner::new();
             if config.hooks.builtin.command_logger {
@@ -6093,23 +5459,6 @@ pub async fn deliver_announcement(
             zeroclaw_api::channel::Channel::send(&ch, &SendMessage::new(&safe_output, target))
                 .await?;
         }
-        "discord" => {
-            let dc = config
-                .channels
-                .discord
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("discord channel not configured"))?;
-            let ch = DiscordChannel::new(
-                dc.bot_token.clone(),
-                dc.guild_id.clone(),
-                dc.allowed_users.clone(),
-                dc.listen_to_bots,
-                dc.mention_only,
-            )
-            .with_workspace_dir(config.workspace_dir.clone());
-            zeroclaw_api::channel::Channel::send(&ch, &SendMessage::new(&safe_output, target))
-                .await?;
-        }
         "slack" => {
             let sl = config
                 .channels
@@ -6142,27 +5491,6 @@ pub async fn deliver_announcement(
             );
             zeroclaw_api::channel::Channel::send(&ch, &SendMessage::new(&safe_output, target))
                 .await?;
-        }
-        #[cfg(feature = "channel-wechat")]
-        "wechat" => {
-            let wc = config
-                .channels
-                .wechat
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("wechat channel not configured"))?;
-            let ch = WeChatChannel::new(
-                wc.allowed_users.clone(),
-                wc.api_base_url.clone(),
-                wc.cdn_base_url.clone(),
-                wc.state_dir.as_ref().map(std::path::PathBuf::from),
-            )?
-            .with_workspace_dir(config.workspace_dir.clone());
-            zeroclaw_api::channel::Channel::send(&ch, &SendMessage::new(&safe_output, target))
-                .await?;
-        }
-        #[cfg(not(feature = "channel-wechat"))]
-        "wechat" => {
-            anyhow::bail!("WeChat channel requires the `channel-wechat` feature");
         }
         other => anyhow::bail!("unsupported delivery channel: {other}"),
     }
@@ -6516,13 +5844,11 @@ mod tests {
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             provider_runtime_options: zeroclaw_providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
@@ -6644,13 +5970,11 @@ mod tests {
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             provider_runtime_options: zeroclaw_providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
@@ -6729,13 +6053,11 @@ mod tests {
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             provider_runtime_options: zeroclaw_providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
@@ -6832,13 +6154,11 @@ mod tests {
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             provider_runtime_options: zeroclaw_providers::ProviderRuntimeOptions::default(),
             workspace_dir: Arc::new(std::env::temp_dir()),
@@ -7439,7 +6759,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -7448,7 +6767,6 @@ BTC is currently around $65,000 based on latest tool output."#
             tool_call_dedup_exempt: Arc::new(Vec::new()),
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             model_routes: Arc::new(Vec::new()),
             query_classification: zeroclaw_config::schema::QueryClassificationConfig::default(),
@@ -7539,7 +6857,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -7556,7 +6873,6 @@ BTC is currently around $65,000 based on latest tool output."#
             tool_call_dedup_exempt: Arc::new(Vec::new()),
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             model_routes: Arc::new(Vec::new()),
             query_classification: zeroclaw_config::schema::QueryClassificationConfig::default(),
@@ -7677,7 +6993,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -7690,7 +7005,6 @@ BTC is currently around $65,000 based on latest tool output."#
             tool_call_dedup_exempt: Arc::new(Vec::new()),
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             model_routes: Arc::new(Vec::new()),
             query_classification: zeroclaw_config::schema::QueryClassificationConfig::default(),
@@ -7786,7 +7100,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -7795,7 +7108,6 @@ BTC is currently around $65,000 based on latest tool output."#
             tool_call_dedup_exempt: Arc::new(Vec::new()),
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             model_routes: Arc::new(Vec::new()),
             query_classification: zeroclaw_config::schema::QueryClassificationConfig::default(),
@@ -7909,7 +7221,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -7918,7 +7229,6 @@ BTC is currently around $65,000 based on latest tool output."#
             tool_call_dedup_exempt: Arc::new(Vec::new()),
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             model_routes: Arc::new(Vec::new()),
             query_classification: zeroclaw_config::schema::QueryClassificationConfig::default(),
@@ -8017,13 +7327,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8110,13 +7418,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8213,13 +7519,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8337,13 +7641,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8442,13 +7744,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8562,13 +7862,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8667,13 +7965,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8765,13 +8061,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -8989,13 +8283,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9105,13 +8397,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: true,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9240,7 +8530,6 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: true,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -9249,7 +8538,6 @@ BTC is currently around $65,000 based on latest tool output."#
             session_store: None,
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9372,13 +8660,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: true,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9482,13 +8768,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9573,13 +8857,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -9664,13 +8946,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -10560,13 +9840,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -10708,13 +9986,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -10897,13 +10173,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -11017,13 +10291,11 @@ BTC is currently around $65,000 based on latest tool output."#
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -11643,13 +10915,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -11743,13 +11013,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -11877,7 +11145,6 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
@@ -11905,7 +11172,6 @@ This is an example JSON object for profile settings."#;
             receipt_generator: None,
             show_receipts_in_response: false,
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
         });
 
         process_channel_message(
@@ -12055,13 +11321,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -12179,13 +11443,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -12295,13 +11557,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -12431,13 +11691,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: false,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),
@@ -12493,6 +11751,7 @@ This is an example JSON object for profile settings."#;
         );
     }
 
+    #[cfg(feature = "channel-telegram")]
     #[test]
     fn build_channel_by_id_unconfigured_telegram_returns_error() {
         let config = Config::default();
@@ -12508,6 +11767,7 @@ This is an example JSON object for profile settings."#;
         }
     }
 
+    #[cfg(feature = "channel-telegram")]
     #[test]
     fn build_channel_by_id_configured_telegram_succeeds() {
         let mut config = Config::default();
@@ -12616,7 +11876,6 @@ This is an example JSON object for profile settings."#;
         let cfg = InterruptOnNewMessageConfig {
             telegram: false,
             slack: false,
-            discord: false,
             mattermost: true,
             matrix: false,
         };
@@ -12628,35 +11887,10 @@ This is an example JSON object for profile settings."#;
         let cfg = InterruptOnNewMessageConfig {
             telegram: false,
             slack: false,
-            discord: false,
             mattermost: false,
             matrix: false,
         };
         assert!(!cfg.enabled_for_channel("mattermost"));
-    }
-
-    #[test]
-    fn interrupt_on_new_message_enabled_for_discord() {
-        let cfg = InterruptOnNewMessageConfig {
-            telegram: false,
-            slack: false,
-            discord: true,
-            mattermost: false,
-            matrix: false,
-        };
-        assert!(cfg.enabled_for_channel("discord"));
-    }
-
-    #[test]
-    fn interrupt_on_new_message_disabled_for_discord_by_default() {
-        let cfg = InterruptOnNewMessageConfig {
-            telegram: false,
-            slack: false,
-            discord: false,
-            mattermost: false,
-            matrix: false,
-        };
-        assert!(!cfg.enabled_for_channel("discord"));
     }
 
     // ── interruption_scope_key tests ──────────────────────────────────────
@@ -12749,13 +11983,11 @@ This is an example JSON object for profile settings."#;
             interrupt_on_new_message: InterruptOnNewMessageConfig {
                 telegram: false,
                 slack: true,
-                discord: false,
                 mattermost: false,
                 matrix: false,
             },
             multimodal: zeroclaw_config::schema::MultimodalConfig::default(),
             media_pipeline: zeroclaw_config::schema::MediaPipelineConfig::default(),
-            transcription_config: zeroclaw_config::schema::TranscriptionConfig::default(),
             hooks: None,
             non_cli_excluded_tools: Arc::new(Vec::new()),
             autonomy_level: AutonomyLevel::default(),

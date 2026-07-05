@@ -252,17 +252,6 @@ webpki-roots = { version = "1.0.6", optional = true }
 
 # email
 
-# HTTP server (gateway) — replaces raw TCP for proper HTTP/1.1 compliance
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query", "ws", "macros"], optional = true }
-hyper = { version = "1", features = ["http1", "server"], optional = true }
-hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server-graceful"], optional = true }
-tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
-tower-http = { version = "0.6", default-features = false, features = ["limit", "timeout"], optional = true }
-http-body-util = { version = "0.1", optional = true }
-
-# rust-embed removed — web dashboard served from filesystem via gateway.web_dist_dir
-mime_guess = { version = "2", optional = true }
-
 # Use the blocking HTTP exporter client to avoid Tokio-reactor panics in
 # non-Tokio contexts.
 
@@ -296,15 +285,11 @@ agent-runtime = [
     "dep:rustls", "dep:rustls-pemfile", "dep:rustls-pki-types", "dep:tokio-rustls", "dep:webpki-roots",
     # Phase 1.5 strip: removed dep:lettre/mail-parser/async-imap (email channel dropped)
     "channel-telegram", "channel-slack", "channel-signal",
-    "channel-mattermost", "channel-whatsapp-cloud", "channel-matrix",
+    "channel-mattermost", "channel-whatsapp-cloud",
 ]
 
 # Major subsystems — each forwards to exactly ONE crate
-gateway = [
-    "dep:zeroclaw-gateway",
-    "dep:axum", "dep:hyper", "dep:hyper-util", "dep:tower", "dep:tower-http", "dep:http-body-util",
-    "dep:mime_guess",
-]
+gateway = ["dep:zeroclaw-gateway"]
 tui-onboarding = ["dep:zeroclaw-tui"]
 schema-export = ["zeroclaw-config/schema-export"]
 acp-bridge = ["dep:tokio-tungstenite"]
@@ -351,13 +336,10 @@ observability-prometheus = [
 # hardware/peripheral-rpi/probe/plugins-wasm features removed in Phase 1.4
 sandbox-landlock = ["zeroclaw-runtime/sandbox-landlock"]
 sandbox-bubblewrap = ["zeroclaw-runtime/sandbox-bubblewrap"]
-browser-native = ["zeroclaw-tools/browser-native"]
 rag-pdf = ["zeroclaw-tools/rag-pdf", "zeroclaw-runtime/rag-pdf"]
 webauthn = ["zeroclaw-runtime/webauthn"]
-embedded-web = ["zeroclaw-gateway/embedded-web"]
 
 # Backward-compatible aliases
-fantoccini = ["browser-native"]
 landlock = ["sandbox-landlock"]
 metrics = ["observability-prometheus"]
 
@@ -366,10 +348,9 @@ metrics = ["observability-prometheus"]
 # Phase 1.5 will strip the remaining non-v1 channels (nostr/matrix/etc.).
 ci-all = [
     "agent-runtime",
-    "channel-matrix",
     "observability-prometheus",
     "sandbox-landlock", "sandbox-bubblewrap",
-    "browser-native", "rag-pdf",
+    "rag-pdf",
     "webauthn", "memory-postgres",
 ]
 
