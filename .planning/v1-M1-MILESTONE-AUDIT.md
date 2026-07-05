@@ -1,8 +1,9 @@
 ---
 milestone: M1
 title: Foundation
-status: structural_complete (cargo-red on osagent-main; 332 bash-test assertions green; CI-iteration-only follow-up)
+status: complete (post-PR-#3 — engineer + wizard release builds green; gateway crate deferred to M2; 332 bash-test assertions green)
 audited: 2026-06-12
+updated: 2026-06-14
 nyquist_compliant: true
 ---
 
@@ -32,20 +33,29 @@ All 6 phases shipped their structural deliverables. The bash test suite (332 ass
   - `andreas2301/sovereign-shield-backup` ← `feat/osagent-upstream-sync-runbook` (UPSTREAM_SYNC.md)
   - `andreas2301/sovereign-shield-install-guide` ← `feat/osagent-install-task` (install_osagent.yml structural template)
 
-## What is intentionally red on `osagent-main`
+## Cargo-green status on `osagent-main`
 
-`cargo build --workspace` fails until cascading `use`-statement references to dropped tools/providers are cleaned in:
+Post-PR-#3 (`chore/01.5-cargo-cleanup-pass-2`), CI's `workspace build (engineer + wizard)` job — which builds the only two artifacts shipped — is green:
 
-1. **`crates/zeroclaw-runtime/src/tools/mod.rs`** — `default_tools_with_runtime` / `all_tools_with_runtime` registration functions still construct and box dropped tool types (`BrowserTool`, `WeatherTool`, `JiraTool`, etc.). Each registration call needs to be deleted.
-2. **`src/channels/mod.rs`** — small reference to `config.notion` (the Notion channel config struct) needs cleanup once we strip `notion` from the config schema.
-3. **`crates/zeroclaw-runtime/src/tools/file_read.rs`** — uses a dropped provider import.
-4. **Possible scattered cfg-guards** referring to features we removed (`#[cfg(feature = "channel-discord")]` etc.) — those just compile out, but lints may flag unreachable code.
+- `cargo build -p osagent-engineer --release` ✅
+- `cargo build -p osagent-wizard --release` ✅
 
-The estimated effort is 1–2 hours with `cargo check --workspace` running locally for feedback. Without cargo on this host I'd be iterating blindly via CI; the bash test suite cannot diagnose Rust-level errors.
+Both binaries are still hollow placeholders ([bins/engineer/Cargo.toml](../bins/engineer/Cargo.toml), [bins/wizard/Cargo.toml](../bins/wizard/Cargo.toml) have empty `[dependencies]`), so the release builds are trivial. M2 starts filling them with `osagent-runtime`, `osagent-channels`, `osagent-tools`, `osagent-bridge`, `osagent-exchange`, `osagent-lifecycle`, `osagent-audit`, and (engineer only) `osagent-tools-mcp`.
+
+What PR #3 cleaned:
+
+1. **`crates/zeroclaw-runtime/src/tools/mod.rs`** — ~17 dropped-tool construction blocks deleted (Notion/Jira/ProjectIntel/ReportTemplate, Backup/CloudOps/CloudPatterns, GoogleWorkspace, ClaudeCode/CodexCli/GeminiCli/OpenCodeCli, Screenshot, LinkedIn+ImageGen, Composio, Reaction+EscalateToHuman, Microsoft365, Swarm, WASM plugin). Return tuple shape preserved (`None` for the reaction/escalate slots) so all 5 callers keep destructuring 6-tuples without code change.
+2. **`src/channels/mod.rs`** — Notion top-level config print line removed.
+3. **`crates/zeroclaw-runtime/src/tools/mod.rs`** test assertions — `pushover` / `browser_open` includes replaced with explicit absence asserts; `BUILTIN_TOOL_INTEGRATIONS` Weather entry removed.
+4. **`CanvasStore` stub** added in `zeroclaw-runtime::tools` so the gateway's ~14 surviving canvas call sites keep compiling. Canvas functionality stays gone; the stub is dead-state.
+
+### Intentionally deferred to M2: gateway sub-surface rewrite
+
+`crates/zeroclaw-gateway/src/lib.rs` still has dead references to STRIP-05–removed sub-modules (`canvas::handle_*`, `sse::`, `acp::`, `static_files::`, `api_pairing::`, `api_webauthn::`, etc.) in its route registration table. This crate does NOT compile cleanly today, but it is **not in any binary's transitive build chain** (engineer/wizard depend on nothing yet), so CI's `workspace build (engineer + wizard)` does not surface it. The gateway will be rewritten coherently as part of M2 when the engineer binary starts linking the kept sub-surface (`/ws/chat` + `paired_tokens` auth + node discovery). A salami-slice fix on `osagent-main` now would just churn dead code; the `CanvasStore` stub stays as a safety net until M2 trims the call sites.
 
 ## What's deferred to a follow-up phase (NOT M1 blockers per design)
 
-- **Cascading source-strip cleanup** for cargo-green — Phase 1.5 follow-up.
+- **Gateway sub-surface rewrite** — coherent gut to match STRIP-05's surviving surface (`/ws/chat` + `paired_tokens` + node discovery). Will be driven by M2 wiring engineer to the gateway, not done in isolation. The `CanvasStore` stub in `zeroclaw-runtime::tools` gets removed in the same pass.
 - **`build.rs` MANIFEST.toml emission** — emit `[declared]` from `CARGO_FEATURE_*` env vars and `[detected]` from post-link symbol analysis. Then CI gate verifies `[declared] == [detected]`.
 - **MANIFEST registration in engineer + wizard binaries** — add `osagent-manifest = { path = ... }` to each binary's Cargo.toml; `main.rs` invokes `manifest_diff` on startup.
 - **Branch protection on `osagent-main`** — manual via GitHub UI or future-phase API call. Recommended status checks: `cargo-deny (licenses + bans + sources)`, `cargo-deny (advisories)`, `wizard-no-mcp-gate (4-layer)`, `test-suite-bash`, `test-suite-rust`.
