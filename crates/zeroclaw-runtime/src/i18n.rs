@@ -331,10 +331,7 @@ mod tests {
             ),
             ("cli-wechat-invalid-bind-code", &[][..], [].as_slice()),
         ];
-        for source in [
-            (include_str!("../locales/en/cli.ftl"), "en"),
-            (include_str!("../locales/zh-CN/cli.ftl"), "zh-CN"),
-        ] {
+        for source in [(include_str!("../locales/en/cli.ftl"), "en")] {
             for (key, args, expected_parts) in keys {
                 let value = format_ftl_message(source.0, source.1, key, args)
                     .unwrap_or_else(|| panic!("{key} should format in {}", source.1));

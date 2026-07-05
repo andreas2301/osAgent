@@ -23,12 +23,9 @@ use zeroclaw_config::schema::Config;
 /// from this list is shown for every provider.
 pub fn provider_family_excludes(provider: &str) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if provider != "azure_openai" {
-        out.push("azure-openai-resource");
-        out.push("azure-openai-deployment");
-        out.push("azure-openai-api-version");
-    }
-    if !matches!(provider, "openai" | "openai_codex") {
+    // Phase 1.5 stripped azure_openai and openai_codex providers.
+    // The openai-compatible base provider still uses these fields.
+    if provider != "openai" {
         out.push("wire-api");
         out.push("requires-openai-auth");
     }
@@ -191,22 +188,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn azure_excludes_hide_for_non_azure() {
-        let excludes = provider_family_excludes("ollama");
-        assert!(excludes.contains(&"azure-openai-resource"));
-        assert!(excludes.contains(&"azure-openai-deployment"));
-        assert!(excludes.contains(&"azure-openai-api-version"));
-    }
-
-    #[test]
-    fn azure_excludes_keep_for_azure() {
-        let excludes = provider_family_excludes("azure_openai");
-        assert!(!excludes.contains(&"azure-openai-resource"));
-        assert!(!excludes.contains(&"azure-openai-deployment"));
-        assert!(!excludes.contains(&"azure-openai-api-version"));
-    }
-
-    #[test]
     fn openai_specific_excludes_for_non_openai() {
         let excludes = provider_family_excludes("anthropic");
         assert!(excludes.contains(&"wire-api"));
@@ -214,18 +195,10 @@ mod tests {
     }
 
     #[test]
-    fn openai_specific_kept_for_openai_family() {
-        for p in &["openai", "openai_codex"] {
-            let excludes = provider_family_excludes(p);
-            assert!(
-                !excludes.contains(&"wire-api"),
-                "wire-api should show for {p}"
-            );
-            assert!(
-                !excludes.contains(&"requires-openai-auth"),
-                "requires-openai-auth should show for {p}"
-            );
-        }
+    fn openai_specific_kept_for_openai_compatible() {
+        let excludes = provider_family_excludes("openai");
+        assert!(!excludes.contains(&"wire-api"));
+        assert!(!excludes.contains(&"requires-openai-auth"));
     }
 
     #[test]
@@ -250,11 +223,8 @@ mod tests {
     fn excluded_paths_for_provider_prefix() {
         let cfg = Config::default();
         let paths = excluded_paths(&cfg, "providers.models.ollama");
-        assert!(
-            paths
-                .iter()
-                .any(|p| p == "providers.models.ollama.azure-openai-resource")
-        );
+        // Phase 1.5 stripped azure_openai; only wire-api remains as an
+        // openai-compatible-base-specific field.
         assert!(
             paths
                 .iter()
